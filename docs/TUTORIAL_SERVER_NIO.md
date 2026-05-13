@@ -127,6 +127,7 @@ public class NioServer {
 
         // 3. Loop infinito do reactor
         while (true) {
+            
             selector.select();   // bloqueia até pelo menos 1 key ter evento pronto
 
             // PEGADINHA: se não remover a key do iterator, o próximo select retorna ela de novo
@@ -190,20 +191,28 @@ public class Main {
 }
 ```
 
-Compile e rode:
+Compile e rode em **2 terminais separados** (não copie tudo num só — o `#` é comentário no shell e quebra a sequência).
 
+**Terminal 1** (compila e roda o servidor em foreground):
 ```bash
 cd /home/arthurd3/Desktop/RINHA-BECK-END/fraudDetection/api
 ./mvnw clean package
-java --add-modules jdk.incubator.vector -jar target/api.jar 9999 &
-# em outro terminal:
-telnet localhost 9999
-# → "Connected to localhost." (vai pendurar — esperado, ainda não respondemos)
-# Pressione Ctrl+] depois digite "quit"
-kill %1
+java --add-modules jdk.incubator.vector -jar target/api.jar 9999
+# Saída esperada: "api: listening on port 9999"
+# Deixa rodando. Para parar depois: Ctrl+C
 ```
 
-Se conectou, o reactor está escutando. Vamos dar memória pra cada conexão.
+**Terminal 2** (cliente — aborta a conexão depois de ver o "Connected"):
+```bash
+telnet localhost 9999
+# → "Trying 127.0.0.1..."
+# → "Connected to localhost." (vai pendurar — esperado, ainda não respondemos)
+# Pra sair: Ctrl+] depois digite "quit" + Enter
+```
+
+Se o Terminal 2 mostra `Connected to localhost.`, o reactor está escutando. Vamos dar memória pra cada conexão.
+
+> Alternativa em 1 terminal só: rode com `&` no fim (`java ... 9999 &`) pra background; depois `kill %1` no final. Mas iniciantes preferem 2 terminais — log do server fica separado e visível.
 
 ---
 
@@ -409,13 +418,21 @@ private static boolean bytesEqual(java.nio.ByteBuffer buf, int start, int end, b
 
 ### 🔍 Test point 3 — request HTTP chega no read()
 
-Compile e rode. Em outro terminal:
+Em **2 terminais separados**:
 
+**Terminal 1** (recompila e roda o server — sempre que você muda código Java, refaz o `./mvnw clean package`):
+```bash
+cd /home/arthurd3/Desktop/RINHA-BECK-END/fraudDetection/api
+./mvnw clean package
+java --add-modules jdk.incubator.vector -jar target/api.jar 9999
+```
+
+**Terminal 2** (manda 1 request HTTP cru pelo netcat):
 ```bash
 printf 'GET /ready HTTP/1.1\r\nHost: localhost\r\n\r\n' | nc localhost 9999
 ```
 
-O `nc` (netcat) manda os bytes e espera resposta. Como o parser ainda não foi escrito, vai retornar `PARSE_INCOMPLETE` ou rebentar. Adicione `System.out.println("read " + bytesRead + " bytes")` temporariamente no `read()` pra confirmar que bytes chegaram. Vamos preencher o parser agora.
+O `nc` (netcat) manda os bytes e espera resposta. Como o parser ainda não foi escrito, vai retornar `PARSE_INCOMPLETE` ou rebentar. Adicione `System.out.println("read " + bytesRead + " bytes")` temporariamente no `read()` pra confirmar que bytes chegaram no Terminal 1. Vamos preencher o parser agora.
 
 ---
 
@@ -739,12 +756,18 @@ Já está conectado no `dispatch()` do `NioServer.java` (§5). Quando o parser t
 
 ### Comandos
 
+Use **2 terminais separados** — server em um, cliente no outro.
+
+**Terminal 1** (server):
 ```bash
 cd /home/arthurd3/Desktop/RINHA-BECK-END/fraudDetection/api
 ./mvnw clean package
-java --add-modules jdk.incubator.vector -jar target/api.jar 9999 &
-sleep 1
+java --add-modules jdk.incubator.vector -jar target/api.jar 9999
+# Espera ver "api: listening on port 9999"
+```
 
+**Terminal 2** (cliente):
+```bash
 # 1. Primeira request
 curl -v http://localhost:9999/ready
 # Esperado nos headers da resposta:
@@ -755,10 +778,9 @@ curl -v http://localhost:9999/ready
 # 2. Keep-alive: 2 requests, mesma conexão TCP
 curl -v http://localhost:9999/ready http://localhost:9999/ready
 # curl deve reusar a conexão — 2 respostas "200 OK" sem novo "Connected to"
-
-# 3. Cleanup
-kill %1
 ```
+
+**Cleanup**: Ctrl+C no Terminal 1 pra parar o servidor.
 
 ### Troubleshooting
 
