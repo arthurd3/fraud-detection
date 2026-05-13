@@ -54,16 +54,77 @@ public class NioServer {
     }
 
     private void accept(SelectionKey serverKey) throws IOException{
+        SocketChannel socketChannel = serverChannel.accept();
+        socketChannel.configureBlocking(false);
 
+        // Connection State via TCP CONNECTION - REUSED FOR ALL CONN REQUESTS
+        ConnectionState state = new ConnectionState();
+
+        socketChannel.register(selector, SelectionKey.OP_READ, state);
     }
 
 
-    private void read(SelectionKey serverKey) throws IOException{
+    private void read(SelectionKey key) throws IOException{
+        SocketChannel channel = (SocketChannel) key.channel();
+        ConnectionState state = (ConnectionState) key.attachment();
 
+        int bytesRead = channel.read(state.readBuffer);
+
+        if(bytesRead == -1){
+            key.cancel();
+            channel.close();
+            return;
+        }
+        if(bytesRead == 0){
+            return;
+        }
+
+        int result = HttpParser.parse(state);
+
+        if(result == HttpParser.PARSE_INCOMPLETE){
+            return;
+        }
+        if(result == HttpParser.PARSE_ERROR){
+            key.cancel();
+            channel.close();
+            return;
+        }
+        dispatch(state,key);
     }
 
 
-    private void write(SelectionKey serverKey) throws IOException{
+    private void write(SelectionKey key) throws IOException{
+        SocketChannel channel = (SocketChannel) key.channel();
+        ConnectionState state = (ConnectionState) key.attachment();
 
+        channel.write(state.writeBuffer);
+
+        if(!state.writeBuffer.hasRemaining()){
+            state.reset();
+            key.interestOps(SelectionKey.OP_READ);
+        }
+    }
+
+
+    private static final byte[] PATH_READY = {'/', 'r', 'e' , 'a', 'd', 'y'};
+
+    private void dispatch(ConnectionState state, SelectionKey key) {
+        if (state.methodCode == ConnectionState.METHOD_GET
+                && bytesEqual(state.readBuffer, state.pathStart, state.pathEnd, PATH_READY)) {
+            org.fraudDetection.controllers.HealthController.handle(state, key);
+            return;
+        }
+        // Onda 1.5 vai tratar POST /fraud-score aqui.
+        // Por enquanto: fecha (404 minimalista)
+        key.cancel();
+        try { key.channel().close(); } catch (IOException ignored) {}
+    }
+
+    private static boolean bytesEqual(java.nio.ByteBuffer buf, int start, int end, byte[] expected) {
+        if (end - start != expected.length) return false;
+        for (int i = 0; i < expected.length; i++) {
+            if (buf.get(start + i) != expected[i]) return false;
+        }
+        return true;
     }
 }

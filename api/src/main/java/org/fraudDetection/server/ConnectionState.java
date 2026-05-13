@@ -15,9 +15,9 @@ public class ConnectionState {
     public static final int STATE_DONE = 7;
 
     // METHOD CODES ( WITHOUT STRING -- INT IS CHEAP)
-    private static final int METHOD_UNKNOW = 0;
-    private static final int METHOD_GET = 1;
-    private static final int METHOD_POST = 2;
+    public static final int METHOD_UNKNOW = 0;
+    public static final int METHOD_GET = 1;
+    public static final int METHOD_POST = 2;
 
     // BUFFERS OFF-HEAP for I/O -- locate 1x and nevermore
     public final ByteBuffer readBuffer = ByteBuffer.allocateDirect(4096);
