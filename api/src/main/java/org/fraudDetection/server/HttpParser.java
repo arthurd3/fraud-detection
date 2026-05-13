@@ -113,6 +113,30 @@ public class HttpParser {
         return ConnectionState.METHOD_UNKNOW;
     }
 
-    
 
+    //COMPARE HEADER NAME CASE INSENSITIVE WITH A EXPECTED IN LOWERCASE
+    private static boolean headerEquals(ByteBuffer buf, int start, int end, byte[] expectedLower){
+        if(end - start != expectedLower.length) return false;
+        for(int j = 0; j< expectedLower.length; j++){
+            byte b = buf.get(start + j);
+
+            if( b >= 'A' && b <= 'Z') b |= 0x20;
+            if(b != expectedLower[j]) return false;
+        }
+        return true;
+    }
+
+
+    private static int parseDecimal(ByteBuffer buf , int start , int end){
+        int value = 0;
+        boolean anyDigit = false;
+        for(int j = start; j< end; j++){
+            byte b = buf.get(j);
+            if(b == ' ' || b == CR) continue;
+            if(b < '0' || b > '9') return -1;
+            value = value * 10 + (b - '0');
+            anyDigit = true;
+        }
+        return anyDigit ? value : -1;
+    }
 }
