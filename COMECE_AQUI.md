@@ -372,6 +372,8 @@ Antes de cada onda, pelo menos:
 
 ### 6.2 Ordem de criação dos arquivos (não pular)
 
+> 📖 **Walkthrough hands-on dos arquivos #1-#5 + `HealthController` codando linha-a-linha**: ver `docs/TUTORIAL_SERVER_NIO.md`. Esse tutorial sai da `./mvnw compile` verde até `curl /ready` retornando `200 OK`, com explicações inline de cada conceito NIO.
+
 1. **`Main.java`** — substitui o placeholder. Lê porta do `args[0]` (default 9999), instancia `NioServer`, chama `start()`.
 2. **`server/NioServer.java`** — Selector loop (accept → read → write). Single-thread reactor.
 3. **`server/ConnectionState.java`** — buffers reutilizáveis por conexão (`readBuffer` 4096B direto, `writeBuffer` 512B direto, `queryVector[14]`).
