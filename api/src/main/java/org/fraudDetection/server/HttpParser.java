@@ -12,7 +12,7 @@ public class HttpParser {
     private static final byte SPACE = (byte) ' ';
     private static final byte COLON = (byte) ':';
 
-    private static final byte[] HRD_CONTENT_LENGTH = {
+    private static final byte[] HDR_CONTENT_LENGTH = {
             'c','o','n','t','e','n','t','-','l','e','n','g','t','h'
     };
 
@@ -28,7 +28,7 @@ public class HttpParser {
                 case ConnectionState.STATE_METHOD -> {
                     if (b == SPACE) {
                         state.methodCode = matchMethod(buf, 0, i);
-                        if (state.methodCode == ConnectionState.METHOD_UNKNOWN) return PARSE_ERROR;
+                        if (state.methodCode == ConnectionState.METHOD_UNKNOW) return PARSE_ERROR;
                         state.parserState = ConnectionState.STATE_PATH;
                         state.pathStart   = i + 1;
                     }
