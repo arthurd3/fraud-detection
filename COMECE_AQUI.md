@@ -275,11 +275,15 @@ Função: ter **algo compilável** já. Esse arquivo vai ser totalmente reescrit
 Wrapper permite rodar `./mvnw` em vez de depender do Maven instalado globalmente — útil em CI e em containers.
 
 ```bash
-# Dentro de api/
+# IMPORTANTE: estar DENTRO de api/ — se rodar do fraudDetection/ ele gera o wrapper na pasta errada
+cd /home/arthurd3/Desktop/RINHA-BECK-END/fraudDetection/api
+pwd  # deve terminar com .../fraudDetection/api
 mvn -N io.takari:maven:wrapper -Dmaven=3.9.9
 ```
 
-Resultado: gera `mvnw`, `mvnw.cmd`, `.mvn/wrapper/maven-wrapper.properties` e `.mvn/wrapper/maven-wrapper.jar`.
+Resultado: gera (dentro de `api/`) `mvnw`, `mvnw.cmd`, `.mvn/wrapper/maven-wrapper.properties` e `.mvn/wrapper/maven-wrapper.jar`.
+
+> Se você acidentalmente rodou do `fraudDetection/` antes, vai ter `mvnw` duplicado no diretório-pai. Limpe com `rm /home/arthurd3/Desktop/RINHA-BECK-END/fraudDetection/{mvnw,mvnw.cmd} && rm -rf /home/arthurd3/Desktop/RINHA-BECK-END/fraudDetection/.mvn`.
 
 > **Pegadinha**: o `mvn` do sistema (`apt install maven` → 3.8.7) usa o Java padrão do Ubuntu 24 (Java 25). O wrapper em si só gera arquivos — o Java não importa nesse passo. Mas para o `./mvnw clean compile` da próxima seção:
 > - **Com Java 25 do sistema**: o `pom.xml` desta seção compila direto (foi por isso que removemos `--enable-preview` do compiler-plugin).
@@ -288,6 +292,7 @@ Resultado: gera `mvnw`, `mvnw.cmd`, `.mvn/wrapper/maven-wrapper.properties` e `.
 ### 4.5 Primeiro `./mvnw compile`
 
 ```bash
+cd /home/arthurd3/Desktop/RINHA-BECK-END/fraudDetection/api   # SEMPRE rodar daqui
 ./mvnw -version       # Maven 3.9.9 + Java 21 (GraalVM) ou Java 25 (Ubuntu)
 ./mvnw clean compile  # deve passar; warning "using incubating module: jdk.incubator.vector" é esperado
 ```
