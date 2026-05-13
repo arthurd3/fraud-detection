@@ -326,6 +326,7 @@ Rode `./mvnw exec:java` ou só compile + main. Confirme 4096/512/true. Apague es
 ```java
 private void accept(SelectionKey serverKey) throws IOException {
     SocketChannel socketChannel = serverChannel.accept();
+    if (socketChannel == null) return;   // defesa: spurious wakeup ou key reentrante (ver pegadinha #5 abaixo)
     socketChannel.configureBlocking(false);
 
     // 1 ConnectionState por conexão TCP — alocado aqui, reutilizado pra todas as requests da conn
@@ -415,6 +416,7 @@ private static boolean bytesEqual(java.nio.ByteBuffer buf, int start, int end, b
 | Fechar channel após write | "segunda req da mesma conn falha" | Voltar a `OP_READ`, NÃO fechar |
 | `channel.write()` partial | "response cortada" | `hasRemaining()` decide se key fica em `OP_WRITE` |
 | Esquecer `state.reset()` antes do próximo OP_READ | "segunda request mistura com a primeira" | `reset()` chamado quando `writeBuffer` drena |
+| `serverChannel.accept()` retorna `null` | `NullPointerException` em `socketChannel.configureBlocking(false)` | Sempre `if (socketChannel == null) return;` antes de usar. Causas: esqueceu `it.remove()` no loop do `start()`, spurious wakeup do kernel, ou key reentrante. |
 
 ### 🔍 Test point 3 — request HTTP chega no read()
 

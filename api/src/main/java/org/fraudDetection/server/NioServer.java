@@ -38,6 +38,7 @@ public class NioServer {
             Iterator<SelectionKey> it = selector.selectedKeys().iterator();
             while(it.hasNext()){
                 SelectionKey key = it.next();
+                it.remove();
                 if(!key.isValid()) continue;
 
                 try {
@@ -55,6 +56,7 @@ public class NioServer {
 
     private void accept(SelectionKey serverKey) throws IOException{
         SocketChannel socketChannel = serverChannel.accept();
+        if (socketChannel == null) return;   // defesa contra spurious wakeup do selector
         socketChannel.configureBlocking(false);
 
         // Connection State via TCP CONNECTION - REUSED FOR ALL CONN REQUESTS
@@ -111,7 +113,7 @@ public class NioServer {
     private void dispatch(ConnectionState state, SelectionKey key) {
         if (state.methodCode == ConnectionState.METHOD_GET
                 && bytesEqual(state.readBuffer, state.pathStart, state.pathEnd, PATH_READY)) {
-            org.fraudDetection.controllers.HealthController.handle(state, key);
+            org.fraudDetection.server.HealthController.handle(state, key);
             return;
         }
         // Onda 1.5 vai tratar POST /fraud-score aqui.
