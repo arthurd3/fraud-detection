@@ -373,6 +373,8 @@ Antes de cada onda, pelo menos:
 ### 6.2 Ordem de criação dos arquivos (não pular)
 
 > 📖 **Walkthrough hands-on dos arquivos #1-#5 + `HealthController` codando linha-a-linha**: ver `docs/TUTORIAL_SERVER_NIO.md`. Esse tutorial sai da `./mvnw compile` verde até `curl /ready` retornando `200 OK`, com explicações inline de cada conceito NIO.
+>
+> 📖 **Walkthrough hands-on dos arquivos #6-#11 (JSON parser → dataset → KNN → `FraudController`) + dispatch `POST /fraud-score`**: ver `docs/TUTORIAL_JSON_KNN.md`. Continua de onde o tutorial NIO parou e fecha a Onda 1 (`{approved, fraud_score}` correto vs os oráculos do `REGRAS_DE_DETECCAO.md`). Inclui a limpeza dos 4 bloqueadores (bug do `matchMethod` POST, typo `HttpResponserWriter`, `HealthController` em `server/`, prints no `Main`).
 
 1. **`Main.java`** — substitui o placeholder. Lê porta do `args[0]` (default 9999), instancia `NioServer`, chama `start()`.
 2. **`server/NioServer.java`** — Selector loop (accept → read → write). Single-thread reactor.

@@ -826,7 +826,7 @@ Você tem `curl /ready` retornando 200 OK. Próximas etapas da **Onda 1** (em or
 
 **Critério de saída da Onda 1**: `curl POST /fraud-score -d @example-payloads.json` retorna `{approved, fraud_score}` corretos vs `example-references.json`.
 
-Tutorial seguinte: `docs/TUTORIAL_JSON_KNN.md` (a criar depois desse fechar e `/ready` confirmado 200 OK).
+Tutorial seguinte: **`docs/TUTORIAL_JSON_KNN.md`** — **já disponível**. Cobre o resto da Onda 1 (limpeza dos bloqueadores → `FraudRequestParser` → `MmapDataset` → `DistanceFunctions` → `HnswIndex` brute force → `FraudController` → dispatch `POST /fraud-score`), fechando a Onda 1 contra os oráculos do `REGRAS_DE_DETECCAO.md`.
 
 ---
 
