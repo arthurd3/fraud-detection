@@ -36,8 +36,6 @@ public class ConnectionState {
     public int headerNameStart = -1;
     public int headerNameEnd = -1;
 
-
-
     // PREPARE STATE TO NEXT REQUEST ( KEEP ALIVE )
     // NOT HAVE BUFFER RELOCATE - JUST REWIND/CLEAR IN INDEX'S
     public void reset(){
