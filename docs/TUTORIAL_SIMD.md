@@ -662,7 +662,7 @@ java -Xmx256m --add-modules jdk.incubator.vector \
 **Onda 2b fechada** = Gate A (SIMD==escalar) + Gate 1 (2 oráculos) + Gate 2 (=1995/2000) +
 Gate 3 (p99 medido) verdes, dataset RB2 off-heap, heap em `-Xmx256m`.
 
-- **Onda 3 — HNSW** hand-rolled (`TUTORIAL_HNSW.md`, a criar): grafo navegável, recall ≥95%
+- **Onda 3 — HNSW** hand-rolled (`docs/TUTORIAL_HNSW.md` ✅ criado): grafo navegável, recall ≥95%
   vs o baseline brute-force. Deixa de varrer os 3M por request.
 - **Onda 4** — conteinerização + k6 oficial (limite 350 MB; o jar hoje empacota o `.gz` —
   resolver lá). **Onda 5** — GraalVM Native Image + PGO; **revalidar Gate A** (regressão
