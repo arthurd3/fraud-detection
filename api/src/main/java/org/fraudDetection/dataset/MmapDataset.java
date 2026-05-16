@@ -1,102 +1,119 @@
 package org.fraudDetection.dataset;
 
+import org.fraudDetection.knn.Quantizer;
+
 import java.io.BufferedInputStream;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 import java.util.zip.GZIPInputStream;
+
 
 public final class MmapDataset {
 
-    public static float[][] vectors;
-    public static boolean[] isFraud;
-    public static int count;
+    public static final int DIMS = 14;
+    private static final int HEADER = 12;                 
+    private static final byte[] MAGIC = {'R', 'B', '1', 0};
 
-    private MmapDataset(){
+    public static MappedByteBuffer data;                  
+    public static int count;
+    public static int lblBase;                            
+
+    private MmapDataset() {}
+
+    public static void load(String gzPath, String binPath) throws IOException {
+        File bin = new File(binPath);
+        if (!bin.exists()) {
+            System.out.println("references.bin ausente — gerando do .gz (1x, ~segundos)...");
+            build(gzPath, bin);
+        }
+        mmap(bin);
+        System.out.println("dataset int8 mmap: " + count + " vetores ("
+                + bin.length() + " bytes off-heap)");
     }
 
+    public static int recBase(int i) { return HEADER + i * DIMS; }
+    public static boolean fraud(int i) { return data.get(lblBase + i) != 0; }
 
-    public static void load(String gzPath) throws IOException{
-        int cap = 1 << 20; 
-        float[][] vs = new float[cap][];
-        boolean[] fs = new boolean[cap];
+    private static void mmap(File bin) throws IOException {
+        try (FileChannel ch = FileChannel.open(bin.toPath())) {
+            MappedByteBuffer m = ch.map(FileChannel.MapMode.READ_ONLY, 0, ch.size());
+            for (int i = 0; i < 4; i++)
+                if (m.get(i) != MAGIC[i]) throw new IOException("magic invalido em " + bin);
+            int c = m.getInt(4);                          
+            int dims = m.getInt(8);
+            if (dims != DIMS) throw new IOException("dims=" + dims + " (esperado 14)");
+            count = c;
+            lblBase = HEADER + count * DIMS;
+            data = m;
+        }
+    }
+
+    private static void build(String gzPath, File bin) throws IOException {
+        byte[] labels = new byte[1 << 20];                
         int n = 0;
+        byte[] vec = new byte[DIMS];
+        float[] f = new float[DIMS];
 
+        try (RandomAccessFile raf = new RandomAccessFile(bin, "rw")) {
+            raf.setLength(0);
+            raf.write(MAGIC);                             
+            raf.writeInt(0);                             
+            raf.writeInt(DIMS);                           
 
-        InputStream raw = new BufferedInputStream(new FileInputStream(gzPath), 1 << 16);
-        raw.mark(2);
-        int m0 = raw.read();
-        int m1 = raw.read();
-        raw.reset();
-        boolean gzipped = (m0 == 0x1f && m1 == 0x8b);   // gzip magic 0x1f 0x8b
+            try (InputStream in = new BufferedInputStream(
+                    new GZIPInputStream(new FileInputStream(gzPath), 1 << 16), 1 << 16)) {
 
-        try(InputStream in = gzipped
-                ? new BufferedInputStream(new GZIPInputStream(raw, 1 << 16), 1 << 16)
-                : raw){
-            
-            int c = skipTo(in, '[');
-            if(c < 0) throw new IOException("Empty dataset / without [");
+                int c = skipTo(in, '[');
+                if (c < 0) throw new IOException("dataset vazio / sem '['");
 
-            while(true){
-                c = nextNonWs(in);
-                if(c == ']' || c < 0) break;
-                if(c != '{') {
-                    if(c == ',') continue;
-                    continue;
+                while (true) {
+                    c = nextNonWs(in);
+                    if (c == ']' || c < 0) break;
+                    if (c != '{') continue;               
+
+                    skipTo(in, '[');                      
+                    for (int k = 0; k < DIMS; k++) f[k] = readFloat(in);
+                    for (int k = 0; k < DIMS; k++) vec[k] = Quantizer.q(f[k]);
+                    raf.write(vec);                       
+
+                    skipTo(in, '"'); skipTo(in, '"'); skipTo(in, '"'); 
+                    int first = in.read();                
+                    skipTo(in, '"');                      
+                    skipTo(in, '}');                      
+
+                    if (n == labels.length) {
+                        byte[] nl = new byte[labels.length << 1];
+                        System.arraycopy(labels, 0, nl, 0, n);
+                        labels = nl;
+                    }
+                    labels[n++] = (byte) (first == 'f' ? 1 : 0);
+                    if ((n % 500_000) == 0) System.out.println("  quantizados " + n + "...");
                 }
-
-                float[] vec = new float[14];
-                skipTo(in , '[');
-                for(int k = 0; k < 14; k++){
-                    vec[k] = readFloat(in);
-                }
-
-                skipTo(in, '"');
-                skipTo(in, '"');
-                skipTo(in, '"');
-                int first = in.read();
-                boolean fraud = (first == 'f');
-                skipTo(in, '"');
-                skipTo(in, '}');
-
-                if (n == cap) {                          // grow
-                    cap <<= 1;
-                    float[][] nv = new float[cap][];   System.arraycopy(vs, 0, nv, 0, n); vs = nv;
-                    boolean[] nf = new boolean[cap];   System.arraycopy(fs, 0, nf, 0, n); fs = nf;
-                }
-
-                vs[n] = vec;
-                fs[n] = fraud;
-                n++;
-                if ((n % 500_000) == 0) System.out.println("  loaded " + n + " vectors...");
-
             }
 
-            vectors = vs;
-            isFraud = fs;
-            count = n;
+            raf.write(labels, 0, n);                      
+            raf.seek(4);
+            raf.writeInt(n);                              
+            raf.getFD().sync();
         }
-
     }
 
-
-    private static int skipTo(InputStream in , int target) throws IOException{
+    private static int skipTo(InputStream in, int target) throws IOException {
         int b;
-
-        while((b = in.read()) != -1) if (b == target) return b;
+        while ((b = in.read()) != -1) if (b == target) return b;
         return -1;
     }
-    
-
     private static int nextNonWs(InputStream in) throws IOException {
         int b;
-        while ((b = in.read()) != -1) {
+        while ((b = in.read()) != -1)
             if (b != ' ' && b != '\t' && b != '\r' && b != '\n') return b;
-        }
         return -1;
     }
-
-   
     private static float readFloat(InputStream in) throws IOException {
         int b = nextNonWs(in);
         boolean neg = false;
@@ -105,14 +122,9 @@ public final class MmapDataset {
         while (b >= '0' && b <= '9') { val = val * 10 + (b - '0'); b = in.read(); }
         if (b == '.') {
             b = in.read();
-            double scale = 0.1;
-            while (b >= '0' && b <= '9') { val += (b - '0') * scale; scale *= 0.1; b = in.read(); }
+            double sc = 0.1;
+            while (b >= '0' && b <= '9') { val += (b - '0') * sc; sc *= 0.1; b = in.read(); }
         }
         return (float) (neg ? -val : val);
     }
-
-
-
-
-
 }

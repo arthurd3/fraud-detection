@@ -40,3 +40,6 @@ build/
 
 ### Rinha dataset (local, não versionar) ###
 src/main/resources/references.json.gz
+
+### Rinha dataset int8 (local, regenerável) ###
+src/main/resources/references.bin
