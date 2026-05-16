@@ -184,7 +184,7 @@ zcat src/main/resources/references.json.gz | head -c 200 ; echo
 # [{"vector":[0.01,0.0833,0.05,0.8261,0.1667,-1,-1,0.0432,0.25,0,1,0,0.2,0.0416],"label":"legit"},{"vector":...
 ```
 
-Os **284 MB descomprimidos são UMA ÚNICA LINHA** (`[{...},{...},...,{...}]`). **`BufferedReader.readLine()` tentaria carregar 284 MB numa `String` → OOM.** Tem que fazer **streaming**: ler byte-a-byte do `GZIPInputStream` e parsear o array elemento por elemento. (O `example-references.json` é o mesmo formato, só *pretty-printed* com espaços/quebras — o parser abaixo ignora whitespace, então funciona pros dois.)
+Os **284 MB descomprimidos são UMA ÚNICA LINHA** (`[{...},{...},...,{...}]`). **`BufferedReader.readLine()` tentaria carregar 284 MB numa `String` → OOM.** Tem que fazer **streaming**: ler byte-a-byte e parsear o array elemento por elemento. (O `example-references.json` é o mesmo formato, só *pretty-printed* com espaços/quebras **e NÃO-gzipado**. Como `load()` sempre faria gunzip, alimentá-lo com o `.json` plano estouraria `ZipException: Not in GZIP format` antes de o parser rodar — por isso `load()` **detecta os 2 magic bytes do gzip** (`0x1f 0x8b`) e só descomprime se for gzip. O parser ignora whitespace, então funciona pros dois: `.json` plano pretty-printed **e** `.json.gz` minificado.)
 
 ### Código completo
 
@@ -219,8 +219,19 @@ public final class MmapDataset {
         boolean[] fs = new boolean[cap];
         int n = 0;
 
-        try (InputStream in = new BufferedInputStream(
-                new GZIPInputStream(new FileInputStream(gzPath), 1 << 16), 1 << 16)) {
+        // gzip auto-detect: references.json.gz é gzip; example-references.json (sanity
+        // de 100) é JSON plano. Espia os 2 magic bytes (0x1f 0x8b) e só embrulha em
+        // GZIPInputStream se for gzip — assim load() funciona pros DOIS formatos.
+        InputStream raw = new BufferedInputStream(new FileInputStream(gzPath), 1 << 16);
+        raw.mark(2);
+        int m0 = raw.read();
+        int m1 = raw.read();
+        raw.reset();
+        boolean gzipped = (m0 == 0x1f && m1 == 0x8b);
+
+        try (InputStream in = gzipped
+                ? new BufferedInputStream(new GZIPInputStream(raw, 1 << 16), 1 << 16)
+                : raw) {
 
             int c = skipTo(in, '[');       // entra no array raiz
             if (c < 0) throw new IOException("dataset vazio / sem '['");
@@ -307,7 +318,7 @@ public final class MmapDataset {
 
 ### Detalhes importantes
 
-- `GZIPInputStream` + `BufferedInputStream` (64 KB) — descompressão streaming, RAM constante.
+- **gzip auto-detect** (magic `0x1f 0x8b`) + `BufferedInputStream` (64 KB) — `.gz` (3M) descomprime streaming; `example-references.json` plano (sanity 100) lê direto. RAM constante. Sem o auto-detect, o Test point 2 fase-1 estoura `ZipException`.
 - `float[3_000_000][14]` ≈ 168 MB + ~48 MB de headers de sub-array ≈ **~220 MB**. **Rode com `-Xmx768m`** (o default da JVM provavelmente dá `OutOfMemoryError`). Veremos isso no boot (§9).
 - Parsing à mão do float: evita 42M de `String` temporárias. Precisão `double` → cast `float` no fim (suficiente; valores têm ≤10 casas).
 - 3M objetos: o load leva **~1-3 min** (descompressão + parse). Normal na v1. Onda 2 mata isso com binário mmap.
