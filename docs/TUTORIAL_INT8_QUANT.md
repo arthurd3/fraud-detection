@@ -645,7 +645,7 @@ java -Xmx256m -cp target/classes:target/test-classes org.fraudDetection.Gate2Int
 
 **Onda 2a fechada** = Gate 1 (2 oráculos) + Gate 2 (≥99%) verdes, dataset int8 off-heap, heap roda em `-Xmx256m`.
 
-- **Onda 2b — SIMD** (`TUTORIAL_SIMD.md`, a criar): `DistanceFunctions.sqDistI8` v2 com `jdk.incubator.vector` (`ByteVector`/`ShortVector`, AVX2). Validar **mesmos** `{approved, fraud_score}` da 2a + medir p99. Pegadinha: regressão silenciosa pra escalar em Native Image (Onda 5) — validar com `-Dgraal.PrintCompilation`.
+- **Onda 2b — SIMD** (`docs/TUTORIAL_SIMD.md` ✅ criado): `DistanceFunctions.sqDistI8` v2 com `jdk.incubator.vector` (`ByteVector`→`IntVector`, AVX2) + formato RB2 padded-16. Mesmos `{approved, fraud_score}` da 2a (bit-idênticos) + medir p99. Pegadinha: regressão silenciosa pra escalar em Native Image (Onda 5) — validar com `-Dgraal.PrintCompilation`.
 - **Onda 3 — HNSW** hand-rolled, recall ≥95% vs o baseline brute-force.
 - **Onda 4** — conteinerização + k6 oficial. **Onda 5** — GraalVM Native Image + PGO.
 
