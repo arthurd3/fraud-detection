@@ -107,7 +107,7 @@ public class HttpParser {
                 && buf.get(start) == 'P'
                 && buf.get(start+1) == 'O'
                 && buf.get(start+2) == 'S'
-                && buf.get(start+2) == 'T'){
+                && buf.get(start+3) == 'T'){
             return ConnectionState.METHOD_POST;
         }
         return ConnectionState.METHOD_UNKNOW;

@@ -23,11 +23,19 @@ public final class MmapDataset {
         int n = 0;
 
 
-        try(InputStream in = new BufferedInputStream(
-                new GZIPInputStream(new FileInputStream(gzPath), 1 << 16), 1 << 16)){
+        InputStream raw = new BufferedInputStream(new FileInputStream(gzPath), 1 << 16);
+        raw.mark(2);
+        int m0 = raw.read();
+        int m1 = raw.read();
+        raw.reset();
+        boolean gzipped = (m0 == 0x1f && m1 == 0x8b);   // gzip magic 0x1f 0x8b
+
+        try(InputStream in = gzipped
+                ? new BufferedInputStream(new GZIPInputStream(raw, 1 << 16), 1 << 16)
+                : raw){
             
             int c = skipTo(in, '[');
-            if(c < 0) throw new IOException("Empty dataset / without [")
+            if(c < 0) throw new IOException("Empty dataset / without [");
 
             while(true){
                 c = nextNonWs(in);
@@ -75,7 +83,7 @@ public final class MmapDataset {
     private static int skipTo(InputStream in , int target) throws IOException{
         int b;
 
-        while((b == in.read()) != -1) if (b == target) return b;
+        while((b = in.read()) != -1) if (b == target) return b;
         return -1;
     }
     

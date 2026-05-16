@@ -1,16 +1,16 @@
 package org.fraudDetection;
 
-import org.fraudDetection.server.ConnectionState;
+import org.fraudDetection.dataset.MmapDataset;
 import org.fraudDetection.server.NioServer;
 
-import java.io.IOException;
-
 public class Main {
-    public static void main(String[] args) throws IOException {
-        ConnectionState s = new ConnectionState();
-        System.out.println("readBuffer cap:    " + s.readBuffer.capacity());   // 4096
-        System.out.println("writeBuffer cap:   " + s.writeBuffer.capacity());  //  512
-        System.out.println("readBuffer direct: " + s.readBuffer.isDirect());   // true
-        new NioServer(9999).start();
+    public static void main(String[] args) throws Exception {
+        long t0 = System.currentTimeMillis();
+        MmapDataset.load("src/main/resources/references.json.gz");
+        System.out.println("dataset loaded: " + MmapDataset.count
+                + " vectors (" + (System.currentTimeMillis() - t0) + " ms)");
+
+        int port = args.length > 0 ? Integer.parseInt(args[0]) : 9999;
+        new NioServer(port).start();
     }
 }

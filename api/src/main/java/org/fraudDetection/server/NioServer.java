@@ -13,6 +13,8 @@ public class NioServer {
     private final int port;
     private Selector selector;
     private ServerSocketChannel serverChannel;
+    private static final byte[] PATH_READY = {'/','r','e','a','d','y'};
+    private static final byte[] PATH_FRAUD = {'/','f','r','a','u','d','-','s','c','o','r','e'};
 
     public NioServer(int port) {
         this.port = port;
@@ -108,16 +110,17 @@ public class NioServer {
     }
 
 
-    private static final byte[] PATH_READY = {'/', 'r', 'e' , 'a', 'd', 'y'};
-
     private void dispatch(ConnectionState state, SelectionKey key) {
         if (state.methodCode == ConnectionState.METHOD_GET
                 && bytesEqual(state.readBuffer, state.pathStart, state.pathEnd, PATH_READY)) {
-            org.fraudDetection.server.HealthController.handle(state, key);
+            org.fraudDetection.controllers.HealthController.handle(state, key);
             return;
         }
-        // Onda 1.5 vai tratar POST /fraud-score aqui.
-        // Por enquanto: fecha (404 minimalista)
+        if (state.methodCode == ConnectionState.METHOD_POST
+                && bytesEqual(state.readBuffer, state.pathStart, state.pathEnd, PATH_FRAUD)) {
+            org.fraudDetection.controllers.FraudController.handle(state, key);
+            return;
+        }
         key.cancel();
         try { key.channel().close(); } catch (IOException ignored) {}
     }

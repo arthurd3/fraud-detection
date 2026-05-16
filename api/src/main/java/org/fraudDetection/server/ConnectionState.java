@@ -41,7 +41,7 @@ public class ConnectionState {
     public final float[] knnDist = new float[5];
     public final boolean[] knnFraud = new boolean[5];
 
-    public int fraudCont = 0;
+    public int fraudCount = 0;
 
     // PREPARE STATE TO NEXT REQUEST ( KEEP ALIVE )
     // NOT HAVE BUFFER RELOCATE - JUST REWIND/CLEAR IN INDEX'S
