@@ -72,6 +72,37 @@ public final class MmapDataset {
     }
 
 
+    private static int skipTo(InputStream in , int target) throws IOException{
+        int b;
+
+        while((b == in.read()) != -1) if (b == target) return b;
+        return -1;
+    }
+    
+
+    private static int nextNonWs(InputStream in) throws IOException {
+        int b;
+        while ((b = in.read()) != -1) {
+            if (b != ' ' && b != '\t' && b != '\r' && b != '\n') return b;
+        }
+        return -1;
+    }
+
+   
+    private static float readFloat(InputStream in) throws IOException {
+        int b = nextNonWs(in);
+        boolean neg = false;
+        if (b == '-') { neg = true; b = in.read(); }
+        double val = 0;
+        while (b >= '0' && b <= '9') { val = val * 10 + (b - '0'); b = in.read(); }
+        if (b == '.') {
+            b = in.read();
+            double scale = 0.1;
+            while (b >= '0' && b <= '9') { val += (b - '0') * scale; scale *= 0.1; b = in.read(); }
+        }
+        return (float) (neg ? -val : val);
+    }
+
 
 
 
