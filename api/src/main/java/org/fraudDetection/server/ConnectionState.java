@@ -36,6 +36,13 @@ public class ConnectionState {
     public int headerNameStart = -1;
     public int headerNameEnd = -1;
 
+    public final float[] queryVector = new float[14];
+
+    public final float[] knnDist = new float[5];
+    public final boolean[] knnFraud = new boolean[5];
+
+    public int fraudCont = 0;
+
     // PREPARE STATE TO NEXT REQUEST ( KEEP ALIVE )
     // NOT HAVE BUFFER RELOCATE - JUST REWIND/CLEAR IN INDEX'S
     public void reset(){
@@ -49,5 +56,7 @@ public class ConnectionState {
         contentLength = 0;
         bodyOffset = -1;
         headerNameStart = -1;
+        headerNameEnd = -1;   
+        fraudCount = 0;       
     }
 }
