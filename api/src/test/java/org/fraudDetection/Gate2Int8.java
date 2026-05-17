@@ -18,6 +18,8 @@ public final class Gate2Int8 {
         MmapDataset.load("src/main/resources/references.json.gz",
                          "src/main/resources/references.bin");        
 
+        HnswIndex.load("src/main/resources/hnsw.bin");   // Onda 3: HNSW.search precisa do grafo mmapeado
+
         List<String> base = Files.readAllLines(
                 Path.of("../docs/baselines/onda1-approved-" + N + ".txt"));
         TestDataReader rd = new TestDataReader(

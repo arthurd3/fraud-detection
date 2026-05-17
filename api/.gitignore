@@ -43,3 +43,6 @@ src/main/resources/references.json.gz
 
 ### Rinha dataset int8 (local, regenerável) ###
 src/main/resources/references.bin
+
+### Rinha HNSW (local, regenerável) ###
+src/main/resources/hnsw.bin

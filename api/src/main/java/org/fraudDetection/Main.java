@@ -1,6 +1,7 @@
 package org.fraudDetection;
 
 import org.fraudDetection.dataset.MmapDataset;
+import org.fraudDetection.knn.HnswIndex;
 import org.fraudDetection.server.NioServer;
 
 public class Main {
@@ -10,6 +11,9 @@ public class Main {
                          "src/main/resources/references.bin");
         System.out.println("dataset loaded: " + MmapDataset.count
                 + " vectors (" + (System.currentTimeMillis() - t0) + " ms)");
+
+        HnswIndex.load("src/main/resources/hnsw.bin");
+        System.out.println("hnsw pronto");
 
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 9999;
         new NioServer(port).start();

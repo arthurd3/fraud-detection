@@ -44,6 +44,9 @@ public class ConnectionState {
     public final byte[] queryQ   = new byte[16];
     public final byte[] vScratch = new byte[16];
 
+    // Onda 3: top-5 ids do HNSW (lazy; zero-alloc após 1ª request; não limpa no reset)
+    public int[] knn5;
+
     public int fraudCount = 0;
 
     // PREPARE STATE TO NEXT REQUEST ( KEEP ALIVE )
