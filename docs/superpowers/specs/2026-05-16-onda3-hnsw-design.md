@@ -3,8 +3,14 @@
 > Brainstorming → design travado → tutorial. Projeto **tutorial-driven**: o entregável é o
 > doc (`docs/TUTORIAL_HNSW.md`); o usuário implementa à mão. Não auto-implementar `.java`.
 > Antecessor: `2026-05-16-onda2b-simd-design.md`.
-> **Pré-requisito:** Onda 2b implementada e verde (RB2 padded-16, `sqDistI8(byte[],byte[])`
-> SIMD, `queryQ[16]`/`vScratch[16]`). Estamos 2 tutoriais à frente do código (2b + 3).
+> **Pré-requisito:** Onda 2b implementada e verde (RB2 padded-16,
+> `sqDistI8Scalar(byte[],byte[])`, `queryQ[16]`/`vScratch[16]`). Estamos 2 tutoriais à
+> frente do código (2b + 3).
+>
+> ⚠️ **Ajuste 2026-05-16 (pós-validação 2b, Gate 3):** o HNSW usa
+> `DistanceFunctions.sqDistI8Scalar` em TODAS as distâncias (build + search + `top5Brute`),
+> NUNCA o `sqDistI8` SIMD — que mediu 3.8× mais lento (crítico no build: bilhões de
+> distâncias). `TUTORIAL_HNSW.md` corrigido idem.
 
 ## Contexto
 
@@ -64,7 +70,7 @@ build, stride fixo (`M0` em L0, `M` nas altas) + `int[] deg`:
 - de `min(maxLevel,L)` até `0`: `W = searchLayer(ef=efC)`; `viz = closestM(W, Mmax(lc))`;
   liga `i↔viz` bidirecional; se `deg(e,lc) > Mmax(lc)` poda e p/ os `Mmax` mais perto.
 - se `L > maxLevel`: `entryPoint=i; maxLevel=L`.
-- distância = `DistanceFunctions.sqDistI8(recScratchA, recScratchB)` (2 records RB2 via
+- distância = `DistanceFunctions.sqDistI8Scalar(recScratchA, recScratchB)` (2 records RB2 via
   `MmapDataset.data.get(recBase(x),buf,0,16)`).
 
 Ao fim: achata a adjacência mutável → CSR e grava `hnsw.bin` (header placeholder →

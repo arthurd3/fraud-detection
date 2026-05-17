@@ -3,9 +3,17 @@
 > De **Onda 2b** (`sqDistI8` SIMD, RB2 int8 off-heap, brute-force 3M por request)
 > → **mesma resposta (aproximada)** com **grafo HNSW**: busca ~`ef_search·log N` em vez de N.
 > **Tempo estimado**: 8-14h (a onda mais densa). **Pré-requisito ABSOLUTO**: Onda 2b
-> implementada e verde (RB2 padded-16, `DistanceFunctions.sqDistI8(byte[],byte[])`,
+> implementada e verde (RB2 padded-16, `DistanceFunctions.sqDistI8Scalar(byte[],byte[])`,
 > `ConnectionState.queryQ[16]`/`vScratch[16]`). Spec:
 > `docs/superpowers/specs/2026-05-16-onda3-hnsw-design.md`.
+
+> ⚠️ **CORREÇÃO — 2026-05-16 (consistência c/ o achado do Gate 3 da Onda 2b).**
+> Este tutorial foi escrito ANTES de medir que o `sqDistI8` **SIMD** ficou **3.8× mais
+> lento** que o escalar. **O HNSW usa `DistanceFunctions.sqDistI8Scalar`** em TODAS as
+> distâncias (build nó↔nó, search query↔nó, `top5Brute`) — nunca o `sqDistI8` SIMD. Importa
+> ainda mais no **build**: O(N·efC·logN) ≈ **bilhões** de distâncias no 1º boot; o SIMD
+> deixaria o build ~4× mais lento. O `sqDistI8` SIMD existe só como referência do Gate A
+> da 2b. Os snippets abaixo já estão corrigidos.
 
 ---
 
@@ -61,7 +69,7 @@ POST /fraud-score:
   fraudCount -> resposta canned (igual 2a/2b)
 ```
 
-Só a **estrutura de busca** muda. Parser, fórmula 14-D, `sqDistI8`, RB2, respostas
+Só a **estrutura de busca** muda. Parser, fórmula 14-D, `sqDistI8Scalar`, RB2, respostas
 canned, servidor — **intactos**. A resposta é a mesma *quando o recall é alto*.
 
 ---
@@ -83,8 +91,9 @@ canned, servidor — **intactos**. A resposta é a mesma *quando o recall é alt
    grande no 1º boot** (`-Xmx2g`); steady-state (mmap) volta a `-Xmx256m`.
 5. **Determinismo.** O nível de cada nó vem de um RNG **com seed fixa** (xorshift) → grafo
    reprodutível → Gate reprodutível.
-6. **Distância = `sqDistI8` da 2b.** Nó↔nó (build) e query↔nó (search) carregam os 16
-   bytes do RB2 via `MmapDataset.data.get(recBase(x), buf, 0, 16)`.
+6. **Distância = `sqDistI8Scalar`** (escalar — decisão 2b Gate 3; o `sqDistI8` SIMD ficou
+   3.8× mais lento e o build faz bilhões de distâncias). Nó↔nó (build) e query↔nó (search)
+   carregam os 16 bytes do RB2 via `MmapDataset.data.get(recBase(x), buf, 0, 16)`.
 
 ---
 
@@ -244,7 +253,7 @@ public final class HnswBuilder {
     private static int dist(int a, int b) {
         MmapDataset.data.get(MmapDataset.recBase(a), HnswScratch.bufA, 0, 16);
         MmapDataset.data.get(MmapDataset.recBase(b), HnswScratch.bufB, 0, 16);
-        return DistanceFunctions.sqDistI8(HnswScratch.bufA, HnswScratch.bufB);
+        return DistanceFunctions.sqDistI8Scalar(HnswScratch.bufA, HnswScratch.bufB);
     }
 
     private static int Mmax(int lc) { return lc == 0 ? M0 : M; }
@@ -501,7 +510,7 @@ public final class HnswIndex {
     // distância query(byte[16]) -> nó do RB2
     private static int distQ(byte[] q, int node) {
         MmapDataset.data.get(MmapDataset.recBase(node), HnswScratch.bufA, 0, 16);
-        return DistanceFunctions.sqDistI8(q, HnswScratch.bufA);
+        return DistanceFunctions.sqDistI8Scalar(q, HnswScratch.bufA);
     }
 
     // searchLayer sobre o GRAFO mmap (Alg.2)
@@ -550,7 +559,7 @@ public final class HnswIndex {
         byte[] vs = HnswScratch.bufB;
         for (int i = 0; i < n; i++) {
             MmapDataset.data.get(MmapDataset.recBase(i), vs, 0, 16);
-            int d = DistanceFunctions.sqDistI8(q, vs);
+            int d = DistanceFunctions.sqDistI8Scalar(q, vs);
             if (d < bd[4]) {
                 int p = 4;
                 while (p > 0 && bd[p-1] > d) { bd[p]=bd[p-1]; bi[p]=bi[p-1]; p--; }
@@ -774,6 +783,7 @@ java -Xmx256m --add-modules jdk.incubator.vector \
 | visited memset | `boolean[]+clear()`/query mata o p99 → **versioned** `int gen` | §2/§4 |
 | scratch estático | só p/ reator single-thread; multi-thread → per-thread | §2/§4 |
 | build heap | 1º boot exige `-Xmx2g` (adjacência L0 densa); steady-state `-Xmx256m` | §5/§9 |
+| distância escalar | HNSW usa `sqDistI8Scalar` (NÃO o `sqDistI8` SIMD — 3.8× mais lento, achado Gate 3 da 2b); crítico no build (bilhões de distâncias) | §2/§5/§7 |
 | RNG níveis | seed fixa (xorshift) → grafo/Gate reprodutíveis | §5 |
 | `searchLayer` quebra | `cd > rMaxDist()` **só** quando `rSize>=ef` | §5/§7 |
 | nó 0 = seed | 1º insert define entry; sem vizinhos ainda (guarda no `insert`) | §5 |
