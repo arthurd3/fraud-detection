@@ -46,3 +46,4 @@ src/main/resources/references.bin
 
 ### Rinha HNSW (local, regenerável) ###
 src/main/resources/hnsw.bin
+src/main/resources/hnsw.rbh1.golden

@@ -43,6 +43,12 @@
                             <mainClass>${main.class}</mainClass>
                         </manifest>
                     </archive>
+                    <excludes>
+                        <exclude>references.json.gz</exclude>
+                        <exclude>references.bin</exclude>
+                        <exclude>hnsw.bin</exclude>
+                        <exclude>hnsw.rbh1.golden</exclude>
+                    </excludes>
                 </configuration>
             </plugin>
         </plugins>

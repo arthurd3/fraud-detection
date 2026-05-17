@@ -207,28 +207,54 @@ public final class HnswBuilder {
         return r;
     }
 
+    // ---- helper int24 (3 bytes big-endian; id < 2^24 ⇒ sempre positivo) ----
+    private static void w24(RandomAccessFile raf, int v) throws IOException {
+        raf.write((v >>> 16) & 0xFF);
+        raf.write((v >>>  8) & 0xFF);
+        raf.write( v         & 0xFF);
+    }
+
     // ---- achata p/ CSR e grava hnsw.bin ----
     private static void write(String binPath) throws IOException {
-        try (RandomAccessFile raf = new RandomAccessFile(binPath, "rw")) {
-            raf.setLength(0);
-            raf.write(new byte[]{'R','B','H','1'});
-            raf.writeInt(N); raf.writeInt(M); raf.writeInt(M0);
-            raf.writeInt(EF_C); raf.writeInt(entry); raf.writeInt(maxLevel);
-            for (int i = 0; i < N; i++) raf.writeByte(level[i]);   // levels[]
-            for (int lc = 0; lc <= maxLevel; lc++) {
-                // off[count+1]
-                int acc = 0;
-                int[] off = new int[N + 1];
-                for (int i = 0; i < N; i++) { off[i] = acc; acc += degOf(i, lc); }
-                off[N] = acc;
-                for (int i = 0; i <= N; i++) raf.writeInt(off[i]);
-                // nbr[]
-                for (int i = 0; i < N; i++) {
-                    int dd = degOf(i, lc);
-                    for (int t = 0; t < dd; t++) raf.writeInt(nbrOf(i, lc, t));
-                }
-            }
-            raf.getFD().sync();
+    try (RandomAccessFile raf = new RandomAccessFile(binPath, "rw")) {
+        raf.setLength(0);
+        raf.write(new byte[]{'R','B','H','2'});
+        raf.writeInt(N); raf.writeInt(M); raf.writeInt(M0);
+        raf.writeInt(EF_C); raf.writeInt(entry); raf.writeInt(maxLevel);
+        for (int i = 0; i < N; i++) raf.writeByte(level[i]);          // levels[]
+
+        // ---- L0 denso ----
+        int acc = 0;
+        int[] off0 = new int[N + 1];
+        for (int i = 0; i < N; i++) { off0[i] = acc; acc += degOf(i, 0); }
+        off0[N] = acc;
+        for (int i = 0; i <= N; i++) raf.writeInt(off0[i]);
+        for (int i = 0; i < N; i++) {
+            int dd = degOf(i, 0);
+            for (int t = 0; t < dd; t++) w24(raf, nbrOf(i, 0, t));
         }
+
+        // ---- camadas altas esparsas ----
+        for (int lc = 1; lc <= maxLevel; lc++) {
+            int Pk = 0;
+            for (int i = 0; i < N; i++) if (level[i] >= lc) Pk++;
+            int[] node = new int[Pk];
+            int p = 0;
+            for (int i = 0; i < N; i++) if (level[i] >= lc) node[p++] = i; // i↑ ⇒ node[] ↑
+            int[] offk = new int[Pk + 1];
+            int a = 0;
+            for (int j = 0; j < Pk; j++) { offk[j] = a; a += degOf(node[j], lc); }
+            offk[Pk] = a;
+
+            raf.writeInt(Pk);
+            for (int j = 0; j < Pk; j++)   w24(raf, node[j]);
+            for (int j = 0; j <= Pk; j++)  raf.writeInt(offk[j]);
+            for (int j = 0; j < Pk; j++) {
+                int nd = node[j], dd = degOf(nd, lc);
+                for (int t = 0; t < dd; t++) w24(raf, nbrOf(nd, lc, t));
+            }
+        }
+        raf.getFD().sync();
     }
+}
 }
