@@ -41,7 +41,8 @@ public class ConnectionState {
     public final float[] knnDist = new float[5];
     public final boolean[] knnFraud = new boolean[5];
 
-    public final byte[] queryQ = new byte[14];
+    public final byte[] queryQ   = new byte[16];
+    public final byte[] vScratch = new byte[16];
 
     public int fraudCount = 0;
 
