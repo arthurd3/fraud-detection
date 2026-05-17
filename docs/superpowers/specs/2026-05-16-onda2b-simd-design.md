@@ -96,6 +96,21 @@ inalterado. `Quantizer` sem mudança de lógica (documentar a invariante do pad-
   `test-data.json` para **escalar vs SIMD** no mesmo JVM; reporta speedup. Sem pass/fail
   absoluto (p99<1ms é Onda 4/5 com Native Image; brute-force 3M não fica sub-ms).
 
+### §5b. RESULTADO DA VALIDAÇÃO (2026-05-16) — correção honesta
+
+Implementado pelo usuário e validado por Claude. **Correto**: Gate A (SIMD≡escalar
+bit-a-bit em 3M, 2 oráculos), Gate 1 (oráculos exatos, RB2 51.000.012 B, off-heap
+`-Xmx256m`), Gate 2 (exatamente 1995/2000 = 99.75% FP=2 FN=3). **Gate 3 NEGATIVO**:
+HotSpot 21/AVX2 — escalar p50≈37 ms vs **SIMD p50≈142 ms** (≈0.26×, **3.8× mais lento**);
+escalar fica ≈37 ms até com `-XX:-UseSuperWord` (não depende de auto-vetorização — é só
+um laço barato). Causa-raiz: `convertShape` cross-shape (64→256) não intrinsificado
+eficiente p/ 14-dim. **Decisão do usuário: `HnswIndex.search` usa `sqDistI8Scalar`**;
+`sqDistI8` SIMD mantido só p/ Gate A + aprendizado. Lição estratégica: o fator-constante
+da distância é secundário num scan O(3M) (3M × qqer = dezenas de ms); o lever de latência
+é **arquitetural (Onda 3 HNSW)**. Decisão #3 (SIMD) deste spec **revisada**: SIMD é
+groundwork/ref de corretude, **não** o caminho de p99. Defeito de tutorial (como o gzip
+da Onda 1) — `TUTORIAL_SIMD.md` corrigido (banner + §6/§7/§11/§12/§13).
+
 ### §6. Não-objetivos
 
 HNSW (Onda 3); container/k6 (Onda 4); Native Image/PGO (Onda 5); mudança de quantização ou
@@ -140,6 +155,8 @@ p/ esta onda).
 
 ## Próximo passo
 
-Escrever `docs/TUTORIAL_SIMD.md` (hands-on PT-BR, §0–§13, espelhando `TUTORIAL_INT8_QUANT.md`)
-e atualizar o ponteiro do `§11` de `TUTORIAL_INT8_QUANT.md`. Implementação fica para o usuário
-(tutorial-driven). Onda seguinte: **Onda 3 — HNSW** (recall ≥95% vs brute-force baseline).
+~~Escrever `docs/TUTORIAL_SIMD.md`…~~ **FEITO** (commit 6d6a87a) e **implementado/validado
+2026-05-16** (ver §5b). Estado: RB2 + off-heap + corretude **fechados**; SIMD **não** é o
+caminho de p99 (produção = escalar). **Onda seguinte = Onda 3 — HNSW**
+(`docs/TUTORIAL_HNSW.md`, commit b1c94bb): recall ≥95% vs brute-force baseline — é aí que
+a latência cai de verdade (O(3M) → ~centenas de distâncias).

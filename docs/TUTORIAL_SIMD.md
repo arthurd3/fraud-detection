@@ -5,6 +5,18 @@
 > **Tempo estimado**: 4-7h. **Pré-requisito absoluto**: Onda 2a fechada (HEAD `27bcab1`, Gate 1+2
 > verdes, `./mvnw clean package` OK). Spec: `docs/superpowers/specs/2026-05-16-onda2b-simd-design.md`.
 
+> ⚠️ **CORREÇÃO — validação 2026-05-16 (defeito de tutorial, como o gzip da Onda 1).**
+> A implementação saiu fiel e **CORRETA** (Gate A SIMD≡escalar bit-a-bit; Gate 1 oráculos;
+> Gate 2 1995/2000). **MAS o SIMD aqui especificado mediu ~3.8× MAIS LENTO que o escalar**
+> (HotSpot 21 / AVX2: numa busca de 3M, escalar p50≈37 ms vs SIMD p50≈142 ms; o escalar
+> fica ~37 ms até com `-XX:-UseSuperWord`). Causa: `convertShape` mudando de shape
+> (64→256 bit) não é intrinsificado eficiente p/ 14-dim; o laço escalar de 16 ints já é
+> ótimo. **Decisão (usuário): produção `HnswIndex.search` usa `sqDistI8Scalar`.** O
+> `sqDistI8` SIMD permanece como referência do Gate A + aprendizado (lição: **meça** SIMD
+> vs escalar — Vector API não vence laços minúsculos fixos bem compilados). O **lever real
+> de latência é a Onda 3 (HNSW)** — cortar de 3.000.000 p/ ~centenas de distâncias; o
+> fator-constante da distância é secundário. Leia §6/§7/§11/§13 com esta correção em mente.
+
 ---
 
 ## §0. Visão geral, o que muda, critério de saída
@@ -38,7 +50,7 @@ latência. A Onda 2b troca essa distância por **SIMD** (Vector API, AVX2), mant
   `{"approved":true,"fraud_score":0.0}`; `tx-3330991687`→`{"approved":false,"fraud_score":1.0}`.
 - **Gate 2 (bloqueia):** `Gate2Int8 2000` = **exatamente `1995/2000 = 99.75% (FP=2 FN=3)
   PASS`** (idêntico à 2a — RB2 = RB1 + pad zero).
-- **Gate 3 (medição):** `BenchSearch` reporta p50/p99 **escalar vs SIMD** + speedup.
+- **Gate 3 (medição):** `BenchSearch` reporta p50/p99 **escalar vs SIMD** + speedup. **RESULTADO 2026-05-16: SIMD 3.8× MAIS LENTO** → produção usa o escalar (ver banner/§11/§13).
 - 1º boot 2b regenera `references.bin` RB2 = **51.000.012** bytes; roda em `-Xmx256m`.
 
 ---
@@ -391,7 +403,9 @@ public final class HnswIndex {
 
         for (int i = 0; i < n; i++) {
             V.get(MmapDataset.recBase(i), vs, 0, 16);     // bulk get absoluto
-            int d = DistanceFunctions.sqDistI8(q, vs);
+            // CORREÇÃO 2026-05-16: produção usa o ESCALAR (SIMD mediu 3.8× mais lento aqui).
+            // O sqDistI8 SIMD fica só p/ o Gate A (DistEquivI8) + aprendizado.
+            int d = DistanceFunctions.sqDistI8Scalar(q, vs);
             if (d < bd[4]) {
                 int p = 4;
                 while (p > 0 && bd[p - 1] > d) { bd[p] = bd[p - 1]; bf[p] = bf[p - 1]; p--; }
@@ -633,9 +647,14 @@ java -Xmx256m --add-modules jdk.incubator.vector \
 # speedup p50 (escalar/SIMD) = X.XXx
 ```
 
-> **Gate 3 é medição, não pass/fail.** Não há alvo absoluto aqui — p99 < 1ms é Onda 4/5
-> (Native Image); brute-force 3M não fica sub-ms. Anote o **speedup**; o aprendizado é
-> "SIMD mais rápido **com decisões idênticas**" (Gate A/2 garantem o "idêntico").
+> **Gate 3 é medição, não pass/fail.** **RESULTADO MEDIDO 2026-05-16 (HotSpot 21 / AVX2):**
+> `ESCALAR p50≈37 ms` · `SIMD p50≈142 ms` · `speedup ≈ 0.26×` → **o SIMD ficou ~3.8× MAIS
+> LENTO**. Experimento `-XX:-UseSuperWord`: escalar ~igual (37 ms) → o escalar **não**
+> depende de auto-vetorização; é só um laço barato. O Vector API `convertShape` (shape
+> 64→256) não é intrinsificado bem p/ 14-dim. **Decisão: produção usa `sqDistI8Scalar`**
+> (mais rápido); `sqDistI8` SIMD vira referência do Gate A. Aprendizado real: **sempre
+> meça** SIMD vs escalar — e o ganho de latência que importa vem da **Onda 3 (HNSW)**,
+> não do fator-constante da distância (3M × qualquer-coisa = dezenas de ms).
 
 ---
 
@@ -653,14 +672,20 @@ java -Xmx256m --add-modules jdk.incubator.vector \
 | Build limpo | §4–§7 mudam em par → `./mvnw clean package` (não incremental) | §7 |
 | Gate 2 exato | Tem de ser **1995/2000**, não "≥99%" (RB2≡RB1+pad) | §10 |
 | Sem preview | **Não** use `java.lang.foreign`/`--enable-preview`; pom intacto | §2 |
+| **SIMD ≠ ganho** | **MEDIDO 3.8× mais lento** que escalar p/ 14-dim; `convertShape` cross-shape mal intrinsificado; **produção = escalar**; sempre meça | §0/§11 |
+| Camada errada | Otimizar fator-constante da distância num scan O(3M) é YAGNI; latência real = Onda 3 | §13 |
 | Native Image | Vector API pode cair p/ escalar silencioso na Onda 5 — validar com `-Dgraal.PrintCompilation` | §13 |
 
 ---
 
 ## §13. Próximos passos
 
-**Onda 2b fechada** = Gate A (SIMD==escalar) + Gate 1 (2 oráculos) + Gate 2 (=1995/2000) +
-Gate 3 (p99 medido) verdes, dataset RB2 off-heap, heap em `-Xmx256m`.
+**Onda 2b (status real 2026-05-16):** correção/formato **FECHADOS** — Gate A (SIMD≡escalar)
++ Gate 1 (2 oráculos) + Gate 2 (=1995/2000) verdes, dataset RB2 off-heap, `-Xmx256m`. O
+objetivo de **latência via SIMD NÃO se concretizou** (Gate 3: SIMD 3.8× mais lento) →
+produção usa o escalar; `sqDistI8` SIMD fica como ref do Gate A. **Não é fracasso da onda**:
+RB2 + off-heap + decisão bit-idêntica são a base necessária; o ganho de latência é
+**arquitetural** e vem agora da **Onda 3**.
 
 - **Onda 3 — HNSW** hand-rolled (`docs/TUTORIAL_HNSW.md` ✅ criado): grafo navegável, recall ≥95%
   vs o baseline brute-force. Deixa de varrer os 3M por request.
