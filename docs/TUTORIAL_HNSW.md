@@ -847,10 +847,16 @@ java -Xmx256m --add-modules jdk.incubator.vector \
 **Onda 3 fechada** = Gate 1 + Gate 2 (≥99%) + Gate 3a (recall@5 ≥95%) + Gate 3b
 (approved ≥99%) + Gate 4 (p99 medido) verdes; `hnsw.bin` off-heap; steady-state `-Xmx256m`.
 
-- **Onda 4 — conteinerização + k6 + budget 350 MB** (`TUTORIAL_CONTAINER.md`, a criar):
-  Docker distroless, HAProxy TCP, 2 instâncias, **resolver memória** (jar não empacota
-  `.gz`; `hnsw.bin` int24/compactado; mmap compartilhado entre instâncias), k6 oficial.
-  Pré-build offline do `references.bin`/`hnsw.bin` (branch `submission`).
+- **Onda 4a — caber em 350 MB** (`TUTORIAL_FIT_350MB.md`, ✅ **criado** —
+  2026-05-17): `hnsw.bin` v2 **RBH2** (int24 nbr + camadas altas esparsas,
+  lossless ~439 MB→~300 MB), `tools.Prebuild` offline, `api.jar` sem dataset,
+  `DATA_PATH`, mmap compartilhado/reclaimável; gate `docker run --memory=350m`.
+  Spec: `docs/superpowers/specs/2026-05-17-onda4a-fit-350mb-design.md`.
+- **Onda 4b — conteinerização + HAProxy + k6 + submission**
+  (`TUTORIAL_CONTAINER.md`, a criar): Dockerfile multi-stage (HotSpot,
+  slim/distroless), `docker-compose.yml` (HAProxy `mode tcp` + 2 instâncias +
+  `deploy.resources.limits` ≤350 MB/1 CPU), k6 oficial, branch `submission` +
+  `info.json` + PR em `participants/`. Consome os binários RBH2 da 4a.
 - **Onda 5 — GraalVM Native Image + PGO**: **revalidar Gate 3 + Gate A da 2b** (regressão
   silenciosa do Vector API → escalar em Native Image; `-Dgraal.PrintCompilation`).
 

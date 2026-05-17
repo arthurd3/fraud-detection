@@ -89,9 +89,12 @@ dados configurável, e **prova** o ajuste sob o cgroup real de 350 MB.
   busca binária em `node_k`. Assinaturas públicas usadas pelo `searchLayer`
   **inalteradas** (nbrLo/nbrHi/nbrAt equivalentes) — `HnswIndex` não muda de
   lógica, só lê o novo layout.
-- `HnswIndex.isValid()`: espera magic **RBH2** + count. `hnsw.bin` ausente ou
-  RBH1 ou count≠ ⇒ rebuild (via o caminho self-bootstrap, agora gravando RBH2).
-  Em produção o `.bin` vem pré-construído (§3) ⇒ só mmapeia.
+- `HnswGraph.isValid()` / `HnswGraph.mmap()`: magic passa a **`RBH2`**.
+  `hnsw.bin` ausente ou RBH1 ou count≠ ⇒ rebuild (self-bootstrap, agora
+  gravando RBH2). **`HnswIndex.java` fica inalterado** — `load()` é agnóstico
+  de formato (chama `HnswGraph.isValid`/`mmap` + `HnswBuilder.build`); no
+  máximo uma string de log. Em produção o `.bin` vem pré-construído (§3) ⇒ só
+  mmapeia.
 
 ### §3. Pré-build offline — `tools.Prebuild`
 
@@ -169,8 +172,8 @@ Mudança de fórmula/quantização/threshold/parametros HNSW (M/M0/efC/ef_search
 | # | Arquivo | Ação |
 |---|---|---|
 | 1 | `knn/HnswBuilder.java` | `write()` → emite RBH2 (L0 int24 denso; camadas altas esparsas `Pk`/`node_k`/`off_k`/`nbr_k`) |
-| 2 | `knn/HnswGraph.java` | mmap RBH2: bases por camada, `get24()`, L0 denso + upper esparso (binary search em `node_k`) |
-| 3 | `knn/HnswIndex.java` | `isValid()` espera magic `RBH2`; ausente/RBH1 ⇒ rebuild (self-bootstrap grava RBH2) |
+| 2 | `knn/HnswGraph.java` | `isValid`/`mmap` magic `RBH2`; bases por camada, `get24()`, L0 denso + upper esparso (binary search em `node_k`) |
+| 3 | `knn/HnswIndex.java` | **inalterado** — `load()` é agnóstico de formato (só string de log, se quiser) |
 | 4 | `Main.java` | `DATA_PATH` (`-D`→env→`src/main/resources`); monta os 3 paths |
 | 5 | `api/pom.xml` | `maven-jar-plugin` `<excludes>` `references.json.gz`/`references.bin`/`hnsw.bin` |
 | 6 | `tools/Prebuild.java` | **novo** — pré-build offline (`-Xmx2g`) de `references.bin` (RB2) + `hnsw.bin` (RBH2) |
