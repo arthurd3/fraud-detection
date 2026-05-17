@@ -5,9 +5,9 @@
 ![Java](https://img.shields.io/badge/Java-21%20LTS-007396)
 ![Build](https://img.shields.io/badge/build-Maven%20(wrapper)-C71A36)
 ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-success)
-![Status](https://img.shields.io/badge/Wave%201-complete%20%E2%9C%94-success)
+![Status](https://img.shields.io/badge/Waves%201--3-complete%20%E2%9C%94-success)
 
-**Status:** Wave 1 complete — `POST /fraud-score` validated end‑to‑end against both official oracles. Waves 2–5 (SIMD, HNSW, containerization, GraalVM native) are on the roadmap below.
+**Status:** Waves 1–3 complete — `int8` off‑heap mmap dataset + a hand‑rolled **HNSW** index. `POST /fraud-score` validated end‑to‑end against both official oracles; recall@5 96.89 % / approved‑agreement 99.90 % vs the brute oracle; HNSW p99 ≈ 0.145 ms (≈430× vs the brute scan). Waves 4–5 (containerization/350 MB budget, GraalVM native) are on the roadmap below.
 
 ---
 
@@ -54,8 +54,8 @@ These constraints are the reason for every design decision in this repository.
 | --- | --- |
 | **By hand** | No web framework, no JSON library, no vector‑search library. The HTTP/1.1 parser, the JSON‑to‑vector parser, the dataset loader and the k‑NN search are all hand‑rolled. The only runtime dependency is the JDK. |
 | **Performance‑first** | A single‑threaded NIO reactor, off‑heap direct buffers, an allocation‑free request path (no `String`, no boxing, no intermediate objects), and pre‑computed canned responses. |
-| **Measure, then optimize** | Wave 1 ships the *correct* baseline (brute‑force float32). Latency work (SIMD, HNSW, native image) is deliberately deferred to later waves so each optimization can be measured against a known‑good reference. |
-| **Stable interfaces, evolving internals** | Some classes (`MmapDataset`, `HnswIndex`) are named for their *target* design. Wave 1 ships deliberately simple implementations behind those names so callers never change as the internals are upgraded across waves. This is intentional and documented — see [ARCHITECTURE.md](docs/ARCHITECTURE.md). |
+| **Measure, then optimize** | Wave 1 shipped the *correct* baseline (brute‑force float32); every later wave is measured against it. Waves 2a/2b (int8 + off‑heap mmap; SIMD evaluated and **rejected for the hot path** — 3.8× slower for this shape) and Wave 3 (HNSW) are done; native image is Wave 5. |
+| **Stable interfaces, evolving internals** | `MmapDataset` and `HnswIndex` were named for their *target* design; as of Wave 3 the names **match reality** (off‑heap `int8` mmap; hand‑rolled HNSW) and the public signatures never changed across waves. Documented in [ARCHITECTURE.md](docs/ARCHITECTURE.md). |
 
 ## Architecture at a glance
 
@@ -80,10 +80,10 @@ flowchart LR
 | --- | --- | --- |
 | `server` | `NioServer`, `ConnectionState`, `HttpParser`, `HttpResponseWriter` | Non‑blocking I/O reactor, per‑connection state, resumable byte‑level HTTP/1.1 parsing, pre‑built responses |
 | `json` | `FraudRequestParser` | Walks the POST body byte‑by‑byte and fills the 14‑D query vector — no `String`, no `Map`, no regex |
-| `dataset` | `MmapDataset` | Loads the ≈3M reference vectors (Wave 1: streaming heap loader) |
-| `knn` | `DistanceFunctions`, `HnswIndex` | Squared‑Euclidean distance and top‑5 nearest‑neighbour search (Wave 1: brute force) |
-| `controllers` | `FraudController`, `HealthController` | Wire a parsed request to search and to the response writer |
-| (root) | `Main` | Loads the dataset, then starts the reactor |
+| `dataset` | `MmapDataset` | ≈3M reference vectors as an `int8` RB2 file, off‑heap `MappedByteBuffer` (self‑bootstrapping from the `.gz` on first boot) |
+| `knn` | `Quantizer`, `DistanceFunctions`, `HnswScratch`, `HnswBuilder`, `HnswGraph`, `HnswIndex` | int8 quantization, squared‑Euclidean distance, and a hand‑rolled **HNSW** graph (flat CSR mmap) top‑5 search |
+| `controllers` | `FraudController`, `HealthController` | Wire a parsed request through quantize → HNSW search → response writer |
+| (root) | `Main` | Maps the dataset and the HNSW graph, then starts the reactor |
 
 A deep, component‑by‑component description with rationale and the p99 cycle budget lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
@@ -109,12 +109,15 @@ The dataset path is resolved relative to the working directory, so start the ser
 
 ```bash
 cd api
-java -Xmx768m --add-modules jdk.incubator.vector -jar target/api.jar 9999
+# first boot only — builds hnsw.bin (and references.bin if absent); minutes:
+java -Xmx2g  --add-modules jdk.incubator.vector -jar target/api.jar 9999
+# steady state — dataset + graph are mmapped:
+java -Xmx256m --add-modules jdk.incubator.vector -jar target/api.jar 9999
 ```
 
-- `-Xmx768m` is required — Wave 1 holds the 3M × `float[14]` dataset on the heap; the JVM default would OOM.
-- `--add-modules jdk.incubator.vector` is the project convention (required from Wave 2 onward).
-- The port argument is optional (defaults to `9999`). On startup the server prints `dataset loaded: <n> vectors (<ms> ms)` followed by `api: Listening on port 9999`.
+- The dataset and HNSW graph are off‑heap `MappedByteBuffer`s, so steady state runs in **`-Xmx256m`** with no OOM. Only the **first boot** needs `-Xmx2g`, to build `hnsw.bin` (and `references.bin` if absent) once; both are gitignored/regenerable.
+- `--add-modules jdk.incubator.vector` is the project convention (the SIMD distance is compiled in, but the production/build path is scalar — see [ARCHITECTURE.md §4](docs/ARCHITECTURE.md#4-component-reference)).
+- The port argument is optional (defaults to `9999`). On startup the server prints `dataset int8 RB2 mmap: <n> ...`, `HNSW mmap: <n> nós ...`, `hnsw pronto`, then `api: Listening on port 9999`.
 
 ### Try it
 
@@ -138,26 +141,28 @@ curl -s -X POST http://localhost:9999/fraud-score \
 
 ## Verified results
 
-Wave 1 was validated against the official oracles from the Rinha specification (`REGRAS_DE_DETECCAO.md`) on a real server running the full 3M dataset:
+Validated at the close of Wave 3 on a real server with the full 3M dataset at `-Xmx256m` — the five gates (see [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology)):
 
-| Check | Expected | Result |
+| Gate | Check | Result |
 | --- | --- | --- |
-| Dataset load (3,000,000 vectors) | loads under the JVM budget | ✅ ≈2.5 s, no OOM at `-Xmx768m` |
-| `GET /ready` | HTTP `200` | ✅ |
-| Legitimate oracle `tx-1329056812` | `{"approved":true,"fraud_score":0.0}` | ✅ byte‑identical |
-| Fraud oracle `tx-3330991687` | `{"approved":false,"fraud_score":1.0}` | ✅ byte‑identical |
-| `./mvnw clean package -DskipTests` | clean build | ✅ exit 0 |
+| 1 | `GET /ready` + both official oracles, byte‑identical | ✅ `{"approved":true,"fraud_score":0.0}` / `{"approved":false,"fraud_score":1.0}` |
+| 2 | sanity vs the frozen Wave‑1 `float` baseline (2000) | ✅ 99.65 % (≥99 %; now *approximate* — HNSW is not exact) |
+| 3a | recall@5 vs the brute‑force int8 oracle (2000) | ✅ **96.89 %** (≥95 %) @ `ef_search=50` |
+| 3b | approved‑agreement vs the brute oracle (2000) | ✅ **99.90 %** (FP=1, FN=1; ≥99 %) |
+| 4 | HNSW vs brute latency | ✅ HNSW p50 0.084 ms / **p99 0.145 ms** vs brute p99 43.8 ms — **≈430×** |
+| — | `./mvnw clean package` | ✅ exit 0; no test harness leaks into the jar |
 
-> **Honest note on latency:** Wave 1 deliberately runs a brute‑force O(n) scan over all ≈3M vectors per request. It is correctness‑complete and allocation‑free on the hot path, **but it does not yet meet the p99 < 1 ms target** — closing that gap is the entire purpose of Waves 2–5. See the performance budget in [ARCHITECTURE.md](docs/ARCHITECTURE.md#performance-budget).
+> **Latency:** the HNSW search is already **sub‑millisecond on HotSpot** (p99 ≈ 0.145 ms), so the *search* line of the p99 < 1 ms target is met before Native Image. Waves 4–5 harden the rest of the envelope (containerization + 350 MB budget; native image + PGO). See the performance budget in [ARCHITECTURE.md](docs/ARCHITECTURE.md#6-performance-budget).
 
 ## Project status & roadmap
 
 | Wave | Goal | Status |
 | --- | --- | --- |
 | **1** | End‑to‑end skeleton, brute‑force float32 k‑NN — correctness baseline | ✅ **Complete** |
-| 2 | int8 quantization + Vector API (SIMD) distance + memory‑mapped binary dataset | ⏳ Planned |
-| 3 | Hand‑rolled HNSW index, recall ≥ 95 % | ⏳ Planned |
-| 4 | Containerization (HotSpot) + official k6 baseline + ≥2 instances behind HAProxy | ⏳ Planned |
+| **2a** | int8 quantization + memory‑mapped off‑heap binary dataset | ✅ **Complete** |
+| **2b** | Vector API (SIMD) distance — *evaluated; 3.8× slower for this shape, scalar kept* | ✅ **Complete** |
+| **3** | Hand‑rolled HNSW index — recall@5 96.89 %, p99 ≈ 0.145 ms (≈430× vs brute) | ✅ **Complete** |
+| 4 | Containerization (HotSpot) + 350 MB budget + official k6 + ≥2 instances behind HAProxy | ⏳ Planned |
 | 5 | GraalVM Native Image + PGO | ⏳ Planned |
 
 The full roadmap, with the per‑stage performance reasoning, is in [`docs/RINHA_PLAN.md`](docs/RINHA_PLAN.md) (PT‑BR).

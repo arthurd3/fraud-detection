@@ -11,6 +11,17 @@
 > `DistanceFunctions.sqDistI8Scalar` em TODAS as distâncias (build + search + `top5Brute`),
 > NUNCA o `sqDistI8` SIMD — que mediu 3.8× mais lento (crítico no build: bilhões de
 > distâncias). `TUTORIAL_HNSW.md` corrigido idem.
+>
+> ⚠️ **Ajuste 2026-05-17 (validação as-built da Onda 3 — implementada à mão, 5 gates
+> verdes).** Duas decisões deste spec foram **superadas pelo as-built** (melhorias
+> corretas, incorporadas): (a) decisão #3 "SELECT-M = closest-M simples (heurística é
+> refino futuro)" e o §6 não-objetivo "heurística (closest-M basta)" → a implementação
+> usa a **heurística Malkov-Yashunin Alg.4 + keepPrunedConnections** (`selectHeuristic`);
+> (b) `degOf` ganhou o guard `lc > level[node]` (sem ele o build de 3M estoura
+> `ArrayIndexOutOfBounds` no flatten — defeito do tutorial original). Gates: Gate 1
+> oráculos exatos, Gate 2 99.65%, Gate 3a recall@5 **96.89%** / Gate 3b **99.90%** no
+> `ef_search=50` default, Gate 4 HNSW p99 **0.145 ms** vs brute 43.8 ms (~430×).
+> `docs/ARCHITECTURE.md` (autoritativo as-built, EN) consolida o estado final.
 
 ## Contexto
 

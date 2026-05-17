@@ -15,6 +15,18 @@
 > deixaria o build ~4× mais lento. O `sqDistI8` SIMD existe só como referência do Gate A
 > da 2b. Os snippets abaixo já estão corrigidos.
 
+> ⚠️ **AJUSTE 2026-05-17 (validação as-built da Onda 3 — 5 gates verdes).**
+> A implementação manual divergiu do tutorial em 2 pontos, ambos **corretos e já
+> incorporados ao §5 abaixo**: (1) `degOf` ganhou o guard
+> `if (lc > level[node]) return 0;` — sem ele o `write()` estoura
+> `ArrayIndexOutOfBounds` para nós com `1 ≤ level[node] < lc` (o array `up` tem só
+> `level·M`); o build de 3M **não completava**. (2) A seleção de vizinhos passou de
+> "closest-M simples" para a **heurística Malkov-Yashunin Alg.4 +
+> keepPrunedConnections** (`selectHeuristic`) — preserva arestas de longo alcance
+> (melhor recall com o mesmo `ef_search`). Validação: Gate 1 oráculos exatos,
+> Gate 2 99.65%, Gate 3a recall@5 **96.89%** e Gate 3b **99.90%** já no
+> `ef_search=50` default, Gate 4 HNSW p99 **0.145 ms** vs brute 43.8 ms (**~430×**).
+
 ---
 
 ## §0. Visão geral, o que muda, critério de saída
@@ -261,6 +273,7 @@ public final class HnswBuilder {
     // vizinhos mutáveis de `node` na camada lc (durante o build)
     private static int degOf(int node, int lc) {
         if (lc == 0) return deg0[node];
+        if (lc > level[node]) return 0;        // nó não existe nesta camada (up sized level*M)
         int[] b = up.get(node); if (b == null) return 0;
         int base = (lc-1)*M, d = 0;
         while (d < M && b[base+d] != -1) d++;
@@ -341,15 +354,14 @@ public final class HnswBuilder {
         // conecta de min(top,L) até 0
         for (int lc = Math.min(top, L); lc >= 0; lc--) {
             searchLayer(q, ep, EF_C, lc);
-            int n = drainSorted(WN, WD);      // crescente
+            int n = drainSorted(WN, WD);      // crescente por dist(q,·)
             int mmax = Mmax(lc);
-            int take = Math.min(mmax, n);
-            // q -> take mais próximos
-            System.arraycopy(WN, 0, TMP, 0, take);
+            // seleção de vizinhos COM heurística (Malkov-Yashunin Alg.4)
+            int take = selectHeuristic(WN, WD, n, mmax, TMP);
             setNbrs(q, lc, TMP, take);
             // back-links + poda
-            for (int t = 0; t < take; t++) connect(WN[t], q, lc);
-            ep = WN[0];
+            for (int t = 0; t < take; t++) connect(TMP[t], q, lc);
+            if (n > 0) ep = WN[0];
         }
         if (L > maxLevel) { entry = q; maxLevel = L; }
     }
@@ -375,7 +387,34 @@ public final class HnswBuilder {
             while (b >= 0 && cd[b] > vd) { cand[b+1]=cand[b]; cd[b+1]=cd[b]; b--; }
             cand[b+1]=vn; cd[b+1]=vd;
         }
-        setNbrs(e, lc, cand, mmax);            // descarta o mais distante
+        // poda COM heurística (não só os mmax mais perto) → preserva navegabilidade
+        int[] sel = new int[mmax];
+        int sl = selectHeuristic(cand, cd, mmax + 1, mmax, sel);
+        setNbrs(e, lc, sel, sl);
+    }
+
+    /**
+     * Malkov-Yashunin Alg.4 — seleção de vizinhos COM heurística.
+     * cand[0..n) / bd[0..n) ASCENDENTES por bd (= dist a `base`). Aceita um candidato e
+     * só se ele estiver mais perto de `base` do que de qualquer já-selecionado → preserva
+     * arestas de longo alcance (grafo navegável). Backfill (keepPrunedConnections) até Mret.
+     */
+    private static int selectHeuristic(int[] cand, int[] bd, int n, int Mret, int[] out) {
+        int r = 0;
+        for (int i = 0; i < n && r < Mret; i++) {
+            int e = cand[i];
+            int de = bd[i];                       // dist(e, base) (precomputado)
+            boolean good = true;
+            for (int j = 0; j < r; j++)
+                if (dist(e, out[j]) < de) { good = false; break; }
+            if (good) out[r++] = e;
+        }
+        for (int i = 0; i < n && r < Mret; i++) {  // backfill: completa c/ mais próximos
+            int e = cand[i], in = 0;
+            for (int j = 0; j < r; j++) if (out[j] == e) { in = 1; break; }
+            if (in == 0) out[r++] = e;
+        }
+        return r;
     }
 
     // ---- achata p/ CSR e grava hnsw.bin ----
@@ -405,8 +444,13 @@ public final class HnswBuilder {
 }
 ```
 
-> `degOf` p/ camada `lc>maxLevel` nunca é chamado (loops respeitam `maxLevel`). Nó 0 é o
-> seed (entry inicial). `WN/WD/TMP` são reusados (build single-thread).
+> `degOf` tem o guard `if (lc > level[node])` porque `write()` itera **todos os nós ×
+> todas as camadas** `0..maxLevel`: sem o guard, um nó com `1 ≤ level[node] < lc`
+> (array `up` de só `level·M`) estoura `ArrayIndexOutOfBounds` no flatten. Nó 0 é o seed
+> (entry inicial). `WN/WD/TMP` são reusados (build single-thread). A seleção de vizinhos
+> usa a heurística Alg.4 (`selectHeuristic`, com backfill keepPrunedConnections), não
+> "closest-M simples" — preserva arestas de longo alcance (recall@5 96.89% já no
+> `ef_search=50`).
 
 🔍 **Test point 2 — build pequeno**. Rode o builder com um RB2 de N≈1000 (gerado do
 `example-references.json` quantizado): termina sem exceção, `entry` válido, `maxLevel`
@@ -787,6 +831,8 @@ java -Xmx256m --add-modules jdk.incubator.vector \
 | RNG níveis | seed fixa (xorshift) → grafo/Gate reprodutíveis | §5 |
 | `searchLayer` quebra | `cd > rMaxDist()` **só** quando `rSize>=ef` | §5/§7 |
 | nó 0 = seed | 1º insert define entry; sem vizinhos ainda (guarda no `insert`) | §5 |
+| `degOf` OOB | guard `if (lc > level[node]) return 0;` — `write()` varre todos os nós × camadas `0..maxLevel`; sem o guard estoura AIOOBE no build 3M | §5 |
+| seleção heurística | `selectHeuristic` (Alg.4 + keepPrunedConnections), NÃO closest-M simples — recall@5 96.89% já no `ef=50` | §5 |
 | oráculo recall | NÃO deletar `top5Brute` (é o ground-truth da onda) | §7 |
 | Gate 2 aproximado | pode sair de `1995` (HNSW≠exato); só `≥99%` vs float | §10 |
 | recall baixo | subir `ef_search` (curva no Gate 4); `M/efC` fixos do plano | §11 |

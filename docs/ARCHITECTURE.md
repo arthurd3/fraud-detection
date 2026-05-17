@@ -1,6 +1,6 @@
 # Architecture — Fraud Detection API
 
-> Engineering reference for the **as‑built** system (Wave 1). This document describes what the code *does today*, why it is shaped this way, and where the deliberate simplifications are. The forward‑looking plan lives in [`RINHA_PLAN.md`](RINHA_PLAN.md) (PT‑BR); this document is the canonical description of the current implementation.
+> Engineering reference for the **as‑built** system, current at the close of **Wave 3 (HNSW)**. This document describes what the code *does today*, why it is shaped this way, and where the deliberate simplifications are. The forward‑looking plan lives in [`RINHA_PLAN.md`](RINHA_PLAN.md) (PT‑BR); this document is the canonical description of the current implementation. When a wave changes the implementation, update the affected component sections and the §1 naming table in the same change.
 
 ## Contents
 
@@ -11,7 +11,7 @@
 5. [The zero‑allocation hot path](#5-the-zero-allocation-hot-path)
 6. [Performance budget](#6-performance-budget)
 7. [Key design decisions & trade‑offs](#7-key-design-decisions--trade-offs)
-8. [Wave 1 limitations and how the roadmap addresses them](#8-wave-1-limitations-and-how-the-roadmap-addresses-them)
+8. [Roadmap status: what each wave delivered](#8-roadmap-status-what-each-wave-delivered)
 9. [Validation methodology](#9-validation-methodology)
 10. [References](#10-references)
 
@@ -21,23 +21,23 @@
 
 The service exposes two endpoints on a single port (default `9999`):
 
-- `GET /ready` — returns `200 OK` once the process is up (the reference dataset is loaded *before* the listener starts, so a successful bind already implies readiness in Wave 1).
+- `GET /ready` — returns `200 OK` once the process is up (the reference dataset **and** the HNSW graph are mapped *before* the listener starts, so a successful bind already implies readiness).
 - `POST /fraud-score` — accepts a transaction JSON and returns `{"approved":<bool>,"fraud_score":<float>}`.
 
-**Naming convention.** Two classes are named for their *target* design rather than their Wave 1 implementation:
+**Naming convention.** Two classes were named for their *target* design from Wave 1. As of Wave 3 **the names now match the implementation**:
 
-| Class | Name implies | Wave 1 actually does | Becomes the name in |
+| Class | Name implies | As‑built today | Realized in |
 | --- | --- | --- | --- |
-| `dataset.MmapDataset` | memory‑mapped binary dataset | streams `references.json.gz` into a heap `float[][]` | Wave 2 |
-| `knn.HnswIndex` | HNSW graph index | brute‑force linear scan, top‑5 by insertion | Wave 3 |
+| `dataset.MmapDataset` | memory‑mapped binary dataset | `MappedByteBuffer` over a pre‑quantized `int8` RB2 file, off‑heap | Wave 2a |
+| `knn.HnswIndex` | HNSW graph index | hand‑rolled HNSW (Malkov‑Yashunin) over a flat CSR graph mmap | Wave 3 |
 
-This is intentional: the **public method signatures are stable** (`MmapDataset.load`, `HnswIndex.search(ConnectionState)`), so callers never change while the internals are upgraded wave by wave. Every place this matters is called out explicitly below.
+The **public method signatures stayed stable** across all waves (`MmapDataset.load`, `HnswIndex.search(ConnectionState)`), so callers never changed while the internals were upgraded wave by wave.
 
-There are **no runtime dependencies** — only the JDK. There is **one thread**. Nothing on the request path allocates (see §5).
+There are **no runtime dependencies** — only the JDK (the `jdk.incubator.vector` module is on the path but the production distance is scalar; see §4 `DistanceFunctions`). There is **one thread**. The request path is allocation‑free except for two small per‑query scratch arrays in the HNSW result drain (see §5).
 
 ## 2. The 14‑dimensional feature vector
 
-Both the dataset vectors and the per‑request query vector live in the same 14‑D space. `json.FraudRequestParser` derives the query vector from the POST body using these formulas and constants (all hard‑coded as `static final`; the normalization/MCC tables are *not* read from disk at runtime in Wave 1).
+Both the dataset vectors and the per‑request query vector live in the same 14‑D space. `json.FraudRequestParser` derives the query vector from the POST body using these formulas and constants (all hard‑coded as `static final`; the normalization/MCC tables are *not* read from disk at runtime).
 
 | Idx | Feature | Formula | Notes |
 | --- | --- | --- | --- |
@@ -62,6 +62,8 @@ Both the dataset vectors and the per‑request query vector live in the same 14�
 
 **The `-1` sentinel.** When `last_transaction` is `null`, indices 5 and 6 are set to `-1` (not `0`, not omitted). The same convention is used in the reference dataset, so the distance function compares like with like — sentinels are *never* filtered or substituted.
 
+**Quantization (Wave 2a).** Before the k‑NN search the 14 floats are quantized to `int8` by `knn.Quantizer`: `q = round(clamp(v, -1, 1) · 127)`, global symmetric scale, no per‑dimension offset. The query is quantized into a 16‑byte buffer (`queryQ`, 14 real + 2 zero pad) so it has the exact layout of an RB2 record; the distance is then a pure integer operation.
+
 **Date handling.** `requested_at` / `timestamp` are ISO‑8601 (`YYYY-MM-DDTHH:MM:SSZ`). The parser converts them with **integer arithmetic only** — no `java.time`:
 
 - Civil‑days since 1970‑01‑01 via Howard Hinnant's `civil_to_days` algorithm.
@@ -81,8 +83,10 @@ sequenceDiagram
     participant Pa as HttpParser
     participant Ct as FraudController
     participant Fp as FraudRequestParser
+    participant Qz as Quantizer
     participant Hx as HnswIndex
-    participant Ds as MmapDataset
+    participant Hg as HnswGraph (mmap)
+    participant Ds as MmapDataset (mmap)
     participant Wr as HttpResponseWriter
 
     Cl->>N: TCP connect
@@ -95,8 +99,10 @@ sequenceDiagram
     N->>Ct: dispatch (method + path match)
     Ct->>Fp: parse body to queryVector 14-D
     alt parse OK
+        Ct->>Qz: quantize queryVector -> queryQ[16] int8
         Ct->>Hx: search(state)
-        Hx->>Ds: scan 3M reference vectors
+        Hx->>Hg: greedy descend maxLevel..1, ef-search on L0
+        Hx->>Ds: int8 distance to ~hundreds of records
         Hx-->>Ct: fraudCount in 0..5
     else parse failed
         Note over Ct: fraudCount = 0 (fail-open)
@@ -113,178 +119,200 @@ Step by step:
 2. **Read.** `NioServer.read` reads available bytes into the connection's direct `readBuffer`. `-1` ⇒ peer closed ⇒ cancel + close. `0` ⇒ nothing yet ⇒ return.
 3. **Parse.** `HttpParser.parse` advances a resumable byte‑level state machine. `PARSE_INCOMPLETE` returns and waits for more bytes (TCP fragmentation is handled by persisting parser position/state in `ConnectionState`); `PARSE_ERROR` closes the connection; `PARSE_DONE` falls through to dispatch.
 4. **Dispatch.** `NioServer.dispatch` matches the method code and the path bytes (`/ready`, `/fraud-score`) directly against pre‑declared `byte[]` constants — no `String`. `GET /ready` → `HealthController`; `POST /fraud-score` → `FraudController`; anything else → cancel + close.
-5. **Score.** `FraudController` calls `FraudRequestParser.parse` to fill `queryVector[14]`. On success it calls `HnswIndex.search`, which scans the dataset, keeps the 5 nearest, and writes `fraudCount` (0–5) into the state. On parse failure it sets `fraudCount = 0` (fail‑open — see §7).
+5. **Score.** `FraudController` calls `FraudRequestParser.parse` to fill `queryVector[14]`. On success it calls `Quantizer.quantize` (→ `queryQ[16]` int8) then `HnswIndex.search`, which walks the HNSW graph (greedy descent through the upper layers, then an `ef_search` local search on layer 0), keeps the 5 nearest, and writes `fraudCount` (0–5) into the state. On parse failure it sets `fraudCount = 0` (fail‑open — see §7).
 6. **Respond.** `HttpResponseWriter.writeFraudScore` copies one of six pre‑built responses into the `writeBuffer`; the controller flips the key to `OP_WRITE`.
 7. **Write & keep‑alive.** `NioServer.write` drains the `writeBuffer`. Once fully written, `ConnectionState.reset()` rewinds the buffers and parser indices (no reallocation) and the key returns to `OP_READ`. The connection is **never closed on success** — it is reused.
 
 ## 4. Component reference
 
-For each unit: **responsibility**, **interface**, **dependencies**, **rationale**.
+For each unit: **responsibility**, **interface**, **rationale**.
 
 ### `server.NioServer` (134 LOC)
 
 - **Responsibility:** own the `Selector`, the listening socket and the reactor loop; route accept/read/write events; dispatch to controllers.
 - **Interface:** `new NioServer(port).start()` (blocks forever in the reactor loop).
-- **Depends on:** `ConnectionState`, `HttpParser`, the two controllers.
 - **Rationale:** a single‑threaded reactor removes all locking, context‑switching and memory‑visibility concerns — the right model for a CPU‑bound, 1‑core budget. The selected‑keys iterator is explicitly `remove()`d each pass (a classic NIO pitfall: forgetting this spins the CPU at 100 %). `accept` null‑checks the channel to survive spurious wake‑ups.
 
-### `server.ConnectionState` (62 LOC)
+### `server.ConnectionState` (68 LOC)
 
-- **Responsibility:** hold everything one connection needs, for its whole lifetime, with zero per‑request allocation.
-- **Interface:** public fields (intentional — this is a data‑oriented hot‑path struct, not an encapsulated object) plus `reset()`.
-- **Holds:** one direct `readBuffer` (4096 B) and one direct `writeBuffer` (512 B); resumable parser fields (`parserState`, `parserPosition`, `methodCode`, `pathStart/End`, `contentLength`, `bodyOffset`, `headerNameStart/End`); the reusable `queryVector[14]`, `knnDist[5]`, `knnFraud[5]`, and `fraudCount`.
-- **Rationale:** buffers are `allocateDirect` (off‑heap, not moved by GC, zero‑copy to the socket) and allocated **once per connection**, never per request. `reset()` rewinds indices for keep‑alive instead of allocating new state. The 4096‑byte read buffer comfortably fits the Rinha payload (≈0.5 KB); it is a deliberate fixed ceiling, not a growable buffer.
+- **Responsibility:** hold everything one connection needs, for its whole lifetime, with (near‑)zero per‑request allocation.
+- **Interface:** public fields (intentional — a data‑oriented hot‑path struct) plus `reset()`.
+- **Holds:** one direct `readBuffer` (4096 B) and one direct `writeBuffer` (512 B); resumable parser fields; the reusable `queryVector[14]`; the Wave‑2 `queryQ[16]` and `vScratch[16]` int8 buffers (14 real + 2 zero pad); the Wave‑3 `knn5` int[5] of top‑5 ids (**lazy**, allocated once on first request, **not** cleared by `reset()`); `knnDist[5]`, `knnFraud[5]`, `fraudCount`.
+- **Rationale:** buffers are `allocateDirect` (off‑heap, not moved by GC, zero‑copy to the socket), allocated **once per connection**. `reset()` rewinds indices for keep‑alive instead of allocating; it deliberately does **not** touch `queryQ`/`vScratch`/`knn5` (they are fully overwritten each request, so clearing would be wasted work).
 
 ### `server.HttpParser` (142 LOC)
 
 - **Responsibility:** turn raw request bytes into the few facts the router needs — method, path range, `Content-Length`, body offset.
 - **Interface:** `static int parse(ConnectionState) → {PARSE_INCOMPLETE|PARSE_DONE|PARSE_ERROR}`.
-- **Rationale:** an 8‑state machine driven one byte at a time. It is **resumable**: progress is stored in `ConnectionState`, so a request split across multiple TCP reads resumes exactly where it stopped. Method matching is byte comparison (`GET`/`POST`); header‑name matching is case‑insensitive via `b | 0x20`; `Content-Length` is parsed by hand (`parseDecimal`, no `Integer.parseInt`). Only the headers the router needs are interpreted. **Known limitations (by design for Wave 1):** no chunked transfer‑encoding, no request pipelining, request+headers+body must fit the 4096‑byte read buffer.
+- **Rationale:** an 8‑state machine driven one byte at a time. It is **resumable**: progress is stored in `ConnectionState`, so a request split across multiple TCP reads resumes exactly where it stopped. Method matching is byte comparison; header‑name matching is case‑insensitive via `b | 0x20`; `Content-Length` is parsed by hand. **Known limitations (by design):** no chunked transfer‑encoding, no request pipelining, request+headers+body must fit the 4096‑byte read buffer.
 
 ### `server.HttpResponseWriter` (52 LOC)
 
 - **Responsibility:** provide ready‑to‑send response bytes.
 - **Interface:** `static writeReady(ConnectionState)`, `static writeFraudScore(ConnectionState, int fraudCount)`.
-- **Rationale:** every possible response is pre‑computed **once** in a `static {}` block. There are exactly **six** `/fraud-score` bodies — `fraud_score` can only be `k/5` for `k ∈ 0..5`, i.e. `{0.0, 0.2, 0.4, 0.6, 0.8, 1.0}`. `approved` is derived (`score < 0.6` ⇔ `fraudCount < 3`). `Content-Length` is computed from the body length at class‑init (the `"false"` body is one byte longer than `"true"`). At request time the writer only does a buffer copy + flip — no formatting, no allocation.
+- **Rationale:** every possible response is pre‑computed **once** in a `static {}` block. There are exactly **six** `/fraud-score` bodies — `fraud_score` can only be `k/5` for `k ∈ 0..5`. `approved` is derived (`score < 0.6` ⇔ `fraudCount < 3`). `Content-Length` is computed at class‑init. At request time the writer only does a buffer copy + flip.
 
 ### `json.FraudRequestParser` (272 LOC)
 
 - **Responsibility:** project the POST body directly into `ConnectionState.queryVector[14]`.
 - **Interface:** `static int parse(ConnectionState) → {PARSE_OK|PARSE_BAD}`.
-- **Rationale:** a *schema‑specific* walker, not a general JSON parser. It locates the four first‑level objects (`transaction`, `customer`, `merchant`, `terminal`) by exact quoted‑key match plus brace matching, then reads each leaf value *within that object's byte range* — this avoids key collisions (`amount` vs `avg_amount` vs `max_amount`). Numbers are parsed by hand into `double` (sign, integer part, fraction; no exponent); booleans by first byte; `known_merchants` membership by scanning the array's quoted tokens. No `String`, no `Map`, no regex, no intermediate objects — the body bytes go straight to floats. `last_transaction: null` yields the `-1` sentinels for indices 5 and 6.
+- **Rationale:** a *schema‑specific* walker, not a general JSON parser. It locates the four first‑level objects (`transaction`, `customer`, `merchant`, `terminal`) by exact quoted‑key match plus brace matching, then reads each leaf value *within that object's byte range* — this avoids key collisions (`amount` vs `avg_amount` vs `max_amount`). Numbers parsed by hand into `double`; booleans by first byte; `known_merchants` membership by scanning quoted tokens. `last_transaction: null` yields the `-1` sentinels for indices 5 and 6.
 
-### `dataset.MmapDataset` (118 LOC)
+### `knn.Quantizer` (16 LOC)
 
-- **Responsibility:** load the ≈3,000,000 reference vectors and their fraud labels into memory.
-- **Interface:** `static load(String gzPath)`; results in `static float[][] vectors`, `static boolean[] isFraud`, `static int count`.
-- **Wave 1 reality:** **not memory‑mapped.** It streams the file through a `GZIPInputStream` (with gzip‑magic auto‑detection `0x1F 0x8B`, falling back to plain input) and parses floats **byte‑by‑byte by hand** — no `readLine`, no `Float.parseFloat`, no `String`. The 284 MB JSON array is one single line; a `String`‑based read would OOM, and hand parsing keeps the 3M‑vector load allocation‑light. Storage is a growable `float[][]` (starts at 2²⁰, doubles) plus a parallel `boolean[]`.
-- **Rationale & cost:** correctness‑first and dependency‑free. The cost is heap residency (3M × `float[14]` plus sub‑array headers) which is why the server needs `-Xmx768m`. Wave 2 replaces this with a pre‑quantized `int8` binary file consumed via `MappedByteBuffer`, behind the same `load`/field interface.
+- **Responsibility:** map a 14‑D `float` vector to `int8`.
+- **Interface:** `static byte q(float)`, `static void quantize(float[] src, byte[] dst)` (writes `dst[0..13]`, leaving `dst[14..15]` as the zero pad).
+- **Rationale:** global symmetric scale `round(clamp(v,−1,1)·127)`. `int8` is ~4× smaller than `float` (cache‑friendly) and the squared‑distance fits in `int32`. The pad‑zero invariant lets the same buffer be compared against RB2 records without masking.
 
-### `knn.DistanceFunctions` (14 LOC)
+### `dataset.MmapDataset` (148 LOC)
+
+- **Responsibility:** make the ≈3,000,000 reference vectors and fraud labels available off‑heap.
+- **Interface:** `static load(String gzPath, String binPath)`; then `static MappedByteBuffer data`, `static int count`, `static int recBase(int i)`, `static boolean fraud(int i)`.
+- **As‑built:** the RB2 binary (`magic 'R','B','2',0` + `int32 count` + `int32 dims=14`, then `count × 16` int8 records of 14 real + 2 zero pad, then `count` label bytes) is `MappedByteBuffer`‑mapped read‑only. **Self‑bootstrapping:** if `references.bin` is missing or its magic/dims don't match, `load` streams `references.json.gz` once (gzip‑magic auto‑detect `0x1F 0x8B`, hand byte‑parser, no `String`/`Float.parseFloat`), quantizes, writes the RB2 file (`getFD().sync()`), then maps it. `references.bin` is gitignored/regenerable. STRIDE = 16 ⇒ `recBase(i) = 12 + i·16`.
+- **Cost:** ≈51 MB on disk, off‑heap. The server runs in `-Xmx256m` with no OOM — proof the dataset is genuinely off‑heap (a `float[3M][14]` heap copy would be ≈220 MB and would not fit).
+
+### `knn.DistanceFunctions` (40 LOC)
 
 - **Responsibility:** the distance metric.
-- **Interface:** `static float sqDist(float[] a, float[] b)`.
-- **Rationale:** **squared** Euclidean over the 14 dimensions, scalar loop, no `sqrt`. Squaring is monotonic, so neighbour ranking is identical to true Euclidean while saving the `sqrt`. The `-1` sentinels participate normally — query and reference share the convention, so the contribution is consistent. **No SIMD yet** (Wave 2 vectorizes this with the Vector API; the module is already on the path).
+- **Interface:** `static float sqDist(float[],float[])`; `static int sqDistI8(byte[],byte[])` (SIMD); `static int sqDistI8Scalar(byte[],byte[])` (scalar, **production**).
+- **Rationale:** **squared** Euclidean, no `sqrt` (monotonic ⇒ identical ranking). `sqDistI8Scalar` is a 16‑iteration integer loop over the padded record. `sqDistI8` is the Wave‑2b Vector API (`jdk.incubator.vector`) implementation; it is **bit‑identical** to the scalar one (Wave‑2b Gate A) but measured **≈3.8× slower** on HotSpot/AVX2 for this tiny fixed 14/16‑lane shape (`convertShape` B2I cross‑shape not well intrinsified). It is therefore kept **only** as a correctness reference; **all production and build distances use `sqDistI8Scalar`**. This matters most in the build, which evaluates billions of distances.
 
-### `knn.HnswIndex` (34 LOC)
+### `knn.HnswScratch` (66 LOC) — Wave 3
+
+- **Responsibility:** per‑search working memory for the single‑threaded reactor.
+- **Holds:** a **versioned visited** array (`int[count]` + a `gen` counter incremented per query — "seen" ⇔ `visited[n]==gen`, so there is **zero `memset` per request**), a candidate **min‑heap** and a result **max‑heap** (parallel `int[]` arrays, cap `1<<15`), and two 16‑byte record buffers for the distance.
+- **Rationale:** the static reactor serves one request at a time, so one static scratch suffices. **Not** thread‑safe by design (forward note: a multi‑threaded wave would make it per‑thread). The versioned‑visited trick is what keeps the search off the GC and avoids an O(3M) clear per query.
+
+### `knn.HnswBuilder` (≈230 LOC) — Wave 3, build‑time only
+
+- **Responsibility:** build the navigable graph from the RB2 dataset and serialize it to `hnsw.bin`.
+- **Interface:** `static void build(String binPath)`; `static int effectiveN()`.
+- **As‑built:** Malkov‑Yashunin insertion. Layer‑0 adjacency is a dense `int[count·M0]` + `int[] deg0`; upper layers are sparse (`HashMap<Integer,int[]>`, block per layer). Level RNG is a fixed‑seed xorshift64 (`0x9E3779B97F4A7C15`) ⇒ **reproducible graph**. Neighbor selection uses the **Malkov‑Yashunin Algorithm 4 heuristic with `keepPrunedConnections` backfill** (`selectHeuristic`) — it keeps a candidate only if it is closer to the base than to any already‑selected neighbor, preserving long‑range edges and graph navigability (this replaced the originally‑specified "closest‑M simple" and is what gives recall@5 96.89 % at the default `ef_search=50`). Parameters are locked: `M=16`, `M0=32`, `ef_construction=200`, `mL=1/ln M`. `degOf` carries the guard `if (lc > level[node]) return 0;` — the flatten step iterates *every node × every layer*, and without the guard a node with `1 ≤ level < lc` (its `up` block is only `level·M` long) throws `ArrayIndexOutOfBounds`. `-Dhnsw.maxNodes=K` caps `effectiveN()` for cheap smoke builds (default = full count; zero production impact). Build is build‑time only — JDK collections are fair game; it is **not** the hot path.
+- **Cost:** O(N·efC·log N) ⇒ minutes and a large heap on the **first boot only** (`-Xmx2g`). Steady state mmaps and runs in `-Xmx256m`. Pre‑building offline is a Wave 4 concern.
+
+### `knn.HnswGraph` (56 LOC) — Wave 3
+
+- **Responsibility:** read‑only `MappedByteBuffer` view of `hnsw.bin`.
+- **Interface:** `isValid(File, expectCount)`, `mmap(File)`, then `level(node)`, `nbrLo/nbrHi(node,k)`, `nbrAt(k,idx)`.
+- **`hnsw.bin` format** (big‑endian, like RB2): a 28‑byte header `magic 'R','B','H','1' | int32 count | int32 M | int32 M0 | int32 efC | int32 entryPoint | int32 maxLevel`, then `count` `uint8` levels, then per layer `k = 0..maxLevel` a **flat CSR**: `int32 offk[count+1]` followed by `int32 nbrk[offk[count]]`. The CSR is *uniform* `count+1` per layer (a node absent at layer `k` has `offk[i+1]==offk[i]`), so the reader needs no bookkeeping. Size is dominated by L0 (≈460 MB for 3M nodes) — int24/sparse‑upper compaction and the 350 MB budget are Wave 4. Gitignored/regenerable.
+
+### `knn.HnswIndex` (≈120 LOC) — Wave 3 (rewritten)
 
 - **Responsibility:** find the 5 nearest reference vectors to the query and count how many are fraudulent.
-- **Interface:** `static void search(ConnectionState)` — reads `state.queryVector`, writes `state.knnDist`, `state.knnFraud`, `state.fraudCount`.
-- **Wave 1 reality:** **brute force.** A single linear scan over all `count` vectors, maintaining a size‑5 top list by insertion (`bd[4]` is the current worst; better candidates shift in). Then it counts fraudulent entries among the 5 → `fraudCount`.
-- **Rationale & cost:** O(n) per request (≈3M distance evaluations × 14 multiply‑adds) — the exact, unambiguous baseline that later waves are measured against. It is the dominant latency cost in Wave 1 and the reason Waves 2–3 exist. Wave 3 replaces the body with a real HNSW graph traversal behind the same `search(ConnectionState)` signature.
+- **Interface:** `static void load(String hnswBin)`, `static void search(ConnectionState)`, `static int top5Hnsw(byte[],int[])`, `static int top5Brute(byte[],int[])`, `static int efSearch` (default 50).
+- **As‑built:** `load` is **self‑bootstrapping** — if `hnsw.bin` is missing/incompatible (`HnswGraph.isValid` checks magic + count vs `effectiveN`), it calls `HnswBuilder.build` once, then mmaps. `search` quantization is done by the caller; it greedily descends `maxLevel → 1` with `ef=1`, then runs `searchLayer(ef=efSearch)` on layer 0 over the mmap'd graph, takes the top 5, and counts fraud labels → `fraudCount`. `top5Brute` is the **retained** exact O(n) int8 scan kept as the recall oracle (Gate 3). The `search(ConnectionState)` signature is unchanged from Wave 1.
+- **Rationale & cost:** the graph walk visits ~hundreds of records instead of 3,000,000. Measured (Wave 3, HotSpot, `-Xmx256m`): **p50 ≈ 0.084 ms, p99 ≈ 0.145 ms** vs the brute scan's ≈36 ms — a ≈430× speedup while keeping recall@5 = 96.89 % and approved‑agreement = 99.90 %. This is the algorithmic change that puts p99 under the 1 ms target *before* Native Image.
 
-### `controllers.FraudController` (22 LOC)
+### `controllers.FraudController` (24 LOC)
 
-- **Responsibility:** orchestrate parse → search → respond for `POST /fraud-score`.
+- **Responsibility:** orchestrate parse → quantize → search → respond for `POST /fraud-score`.
 - **Interface:** `static handle(ConnectionState, SelectionKey)`.
-- **Behaviour:** `FraudRequestParser.parse`; on `PARSE_BAD` set `fraudCount = 0` (**fail‑open**), otherwise `HnswIndex.search`; then `HttpResponseWriter.writeFraudScore` and flip the key to `OP_WRITE`. See §7 for the fail‑open trade‑off.
+- **Behaviour:** `FraudRequestParser.parse`; on `PARSE_BAD` set `fraudCount = 0` (**fail‑open**), otherwise `Quantizer.quantize(queryVector, queryQ)` then `HnswIndex.search`; then `HttpResponseWriter.writeFraudScore` and flip the key to `OP_WRITE`. See §7.
 
 ### `controllers.HealthController` (14 LOC)
 
-- **Responsibility:** answer `GET /ready`.
-- **Interface:** `static handle(ConnectionState, SelectionKey)` → `writeReady` + `OP_WRITE`.
+- **Responsibility:** answer `GET /ready` → `writeReady` + `OP_WRITE`.
 
-### `Main` (16 LOC)
+### `Main` (21 LOC)
 
-- **Responsibility:** process entry point. Load the dataset (timing it and printing the count), then start the reactor on the requested port (default `9999`).
-- **Rationale:** the dataset is loaded *before* the listener binds, so by the time `/ready` can answer, the service is genuinely ready. Readiness *gating* (loading concurrently and flipping a ready flag) is a Wave 4 concern.
+- **Responsibility:** process entry point. `MmapDataset.load(gz, bin)` (timing/printing the count), then `HnswIndex.load(hnsw.bin)`, then start the reactor on the requested port (default `9999`).
+- **Rationale:** the dataset and the graph are mapped *before* the listener binds, so by the time `/ready` can answer, the service is genuinely ready. The first boot additionally builds `hnsw.bin` (minutes, `-Xmx2g`); every later boot mmaps it instantly.
 
 ## 5. The zero‑allocation hot path
 
-Once a connection is accepted, serving a request allocates **nothing** on the heap:
+Once a connection is accepted, serving a request allocates **almost nothing** on the heap:
 
-- I/O buffers are `ByteBuffer.allocateDirect`, created once per connection, reused across requests via `reset()`.
+- I/O buffers are `ByteBuffer.allocateDirect`, created once per connection, reused via `reset()`.
 - The HTTP parser works over buffer indices; it never materializes a `String`.
-- The JSON parser writes straight into the pre‑allocated `queryVector[14]`; no nodes, no maps.
-- k‑NN uses the pre‑allocated `knnDist[5]` / `knnFraud[5]` scratch arrays on the state.
+- The JSON parser writes straight into the pre‑allocated `queryVector[14]`; quantization into the pre‑allocated `queryQ[16]`; no nodes, no maps.
+- The HNSW search reuses the **static** `HnswScratch` (versioned visited + heaps + record buffers) — no per‑request `memset`, no graph‑node objects (the graph is a flat mmap of `int`s).
 - Responses are pre‑built `byte[]`; the writer only copies and flips.
 
-The only large allocation is the **one‑time** dataset load at startup. This matters because the scoring function punishes tail latency, and GC pauses are tail latency. A request path that never allocates cannot trigger a young‑GC mid‑request.
+**The one honest exception:** `HnswIndex.takeTop5` allocates two small `int[rSize]` arrays (`rSize ≤ ef`, ≈50–200 ints) per query to drain the result max‑heap into ascending order. This is a few hundred bytes of short‑lived garbage per request — orders of magnitude below a young‑gen threshold and far from the per‑request tail‑latency budget — but it is *not* literally zero‑alloc. Eliminating it (drain into a reused scratch on `HnswScratch`) is a candidate micro‑optimization for Wave 5; it was left as‑is in Wave 3 because Gate 4 already shows p99 ≈ 0.145 ms with it. The only other allocation is the **one‑time** dataset/graph load at startup.
 
 ## 6. Performance budget
 
-The target (from [`RINHA_PLAN.md`](RINHA_PLAN.md)) is **p99 < 1 ms**, i.e. ≈2.6 M CPU cycles at 2.6 GHz on the reference Mac Mini. The intended steady‑state breakdown — a **roadmap target, not a Wave 1 measurement** — is roughly:
+The target (from [`RINHA_PLAN.md`](RINHA_PLAN.md)) is **p99 < 1 ms**, i.e. ≈2.6 M CPU cycles at 2.6 GHz on the reference Mac Mini. Measured end‑to‑end search latency at the close of Wave 3 (HotSpot, `-Xmx256m`, 3M dataset, `ef_search=50`):
 
-| Stage | Target |
-| --- | --- |
-| HTTP parse | ≈ 80 µs |
-| JSON → vector | ≈ 60 µs |
-| Quantize (Wave 2) | ≈ 5 µs |
-| k‑NN search (HNSW, ef≈50, Wave 3) | ≈ 230 µs |
-| Score | ≈ 5 µs |
-| Response + write | ≈ 60 µs |
-| **Total (ideal)** | **≈ 440 µs**, leaving headroom for tail |
+| Path | p50 | p99 |
+| --- | --- | --- |
+| HNSW search (Wave 3, production) | ≈ 0.084 ms | ≈ 0.145 ms |
+| Brute‑force int8 scan (Wave 2b, retained as oracle) | ≈ 36.1 ms | ≈ 43.8 ms |
 
-**Wave 1 vs. this budget.** Wave 1's k‑NN is a full O(≈3 M) scan per request, which is *orders of magnitude* over the 230 µs search line — Wave 1 is intentionally **not** on budget. It exists to lock down correctness. The gap is closed by:
+The HNSW search is already **sub‑millisecond on HotSpot** — the search line of the budget is met before Native Image. The remaining waves harden the rest of the envelope rather than the search:
 
-- **Wave 2** — `int8` quantization shrinks each vector ~4× (cache‑friendly) and the Vector API does the distance in SIMD lanes.
-- **Wave 3** — HNSW turns the O(n) scan into an O(log n)‑ish graph walk visiting ~thousands of vectors instead of millions.
-- **Wave 5** — GraalVM Native Image + PGO removes JIT warm‑up and trims the constant factors.
+- **Wave 1** — correctness baseline (full O(3M) `float` scan).
+- **Wave 2a/2b** — `int8` quantization + off‑heap mmap shrank each vector ~4×; SIMD was explored and **rejected for the hot path** (3.8× slower here — see §7).
+- **Wave 3** — HNSW turned the O(n) scan into a graph walk visiting ~hundreds of vectors. **This is the latency lever.**
+- **Wave 4** — containerization, HAProxy, 2 instances, the 350 MB memory budget (jar must not bundle the `.gz`; `hnsw.bin` int24/compaction; shared mmap), official k6 baseline.
+- **Wave 5** — GraalVM Native Image + PGO removes JIT warm‑up and trims constant factors; **must re‑validate** Wave‑2b Gate A and the Wave‑3 gates (silent Vector‑API→scalar regression risk).
 
 ## 7. Key design decisions & trade‑offs
 
 | Decision | Why | Cost / risk accepted |
 | --- | --- | --- |
-| Single‑threaded NIO reactor | 1‑CPU budget; no locks, no context switches, deterministic | Cannot use multiple cores; one slow request head‑of‑lines the loop (acceptable while the path is bounded and allocation‑free) |
-| Zero runtime dependencies, everything by hand | Smallest footprint, full control of the hot path, no framework overhead or reflection | More code to own and test; no library safety net |
-| Direct buffers, allocation‑free path | GC pauses are tail latency; the score punishes tail latency | Manual buffer/index bookkeeping; fixed 4096‑byte request ceiling |
-| Pre‑computed canned responses (6) | `fraud_score` has only 6 possible values; formatting at request time is wasted work | Logic (`approved`, `Content-Length`) is fixed at class‑init and must stay in sync with the rule `score < 0.6` |
+| Single‑threaded NIO reactor | 1‑CPU budget; no locks, no context switches, deterministic | One slow request head‑of‑lines the loop (acceptable while the path is bounded) |
+| Zero runtime dependencies, everything by hand | Smallest footprint, full control of the hot path | More code to own and test; no library safety net |
+| Direct buffers, (near‑)allocation‑free path | GC pauses are tail latency; the score punishes tail latency | Manual buffer/index bookkeeping; fixed 4096‑byte request ceiling; one small heap drain in `takeTop5` (§5) |
+| Pre‑computed canned responses (6) | `fraud_score` has only 6 possible values | `approved`/`Content-Length` fixed at class‑init; must stay in sync with `score < 0.6` |
 | Squared Euclidean (no `sqrt`) | Monotonic ⇒ identical ranking, cheaper | Distances are not true magnitudes (irrelevant for k‑NN ranking) |
-| Schema‑specific JSON walker | Avoids object graph + key‑collision (`amount`/`avg_amount`); fastest possible | Brittle to schema changes; not reusable for other payloads |
-| Hard‑coded normalization/MCC tables | No file I/O or parsing on the hot path in Wave 1 | Constants are duplicated from the spec; must be updated if the spec changes |
-| Integer‑only date math (Hinnant) | Avoids `java.time` allocation/parsing | Hand‑verified algorithm; less obvious than `LocalDateTime` |
-| **Fail‑open on unparseable body** (`fraudCount = 0` ⇒ `approved:true`) | The scoring function penalizes an HTTP error (weight 5) more than a missed fraud (weight 3); returning a well‑formed "approved" avoids the larger penalty | A malformed/edge payload is silently approved (a potential false negative). This is a scoring‑driven choice, not a security stance, and is revisited if real inputs prove it wrong |
-| `MmapDataset` heap loader / `HnswIndex` brute force in Wave 1 | Ship a correct, measurable baseline before optimizing | Names temporarily over‑promise; mitigated by the explicit convention in §1 and a stable interface |
+| `int8` global‑symmetric quantization (Wave 2a) | ~4× smaller, cache‑friendly, integer distance, off‑heap mmap | Tiny quantization error; sanity gate is now *approximate* vs the `float` baseline (≥99 %, not exact) |
+| **Scalar distance, SIMD rejected for the hot path** (Wave 2b) | The Vector API impl is bit‑identical but ≈3.8× slower for this tiny fixed shape on HotSpot/AVX2; build does billions of distances | `sqDistI8` kept only as a correctness reference; revisit under Native Image (Wave 5) |
+| **HNSW with the Alg.4 heuristic** (Wave 3) | The O(3M) scan was the latency wall; the heuristic preserves navigability ⇒ recall@5 96.89 % at the default `ef=50` | HNSW is *approximate* — guarded by Gate 3a (recall ≥95 %) and Gate 3b (approved‑agreement ≥99 %) vs the retained brute oracle |
+| Self‑bootstrapping mmap files (RB2, `hnsw.bin`) | First boot derives the binaries; later boots map instantly; binaries gitignored/regenerable | First boot is minutes + `-Xmx2g`; offline pre‑build is a Wave 4 concern |
+| Fixed‑seed level RNG | Reproducible graph ⇒ reproducible gates | The graph is one deterministic sample of the HNSW distribution |
+| **Fail‑open on unparseable body** (`fraudCount = 0` ⇒ `approved:true`) | The score penalizes an HTTP error (weight 5) more than a missed fraud (weight 3) | A malformed payload is silently approved (a scoring‑driven choice, not a security stance) |
+| Schema‑specific JSON walker / hard‑coded tables / integer date math | Avoids object graph, key collisions, file I/O and `java.time` on the hot path | Brittle to schema/spec changes; hand‑verified algorithms |
 
-## 8. Wave 1 limitations and how the roadmap addresses them
+## 8. Roadmap status: what each wave delivered
 
-| Limitation today | Impact | Addressed by |
+| Concern | Status | Wave |
 | --- | --- | --- |
-| Brute‑force O(n) k‑NN | Latency far above the p99 target | Wave 3 (HNSW) — and Wave 2 (SIMD) for the constant factor |
-| `float[][]` dataset on heap, needs `-Xmx768m` | High memory residency vs. the 350 MB infra budget | Wave 2 (`int8` mmap binary ⇒ ~4× smaller, off‑heap, shareable between instances) |
-| Scalar distance | Leaves CPU SIMD lanes idle | Wave 2 (Vector API) |
-| No containerization / load balancer / 2 instances | Not yet runnable under the official harness | Wave 4 (HotSpot container + HAProxy + k6 baseline) |
-| JIT warm‑up, no PGO | Cold‑start and constant‑factor overhead | Wave 5 (GraalVM Native Image + PGO) |
-| No chunked encoding, no pipelining, 4 KB request cap | Fine for the Rinha payload; not general‑purpose | Out of scope by design (the spec's payload is small and fixed) |
-| Readiness is implied by a successful bind | No graceful "loading" window | Wave 4 (proper readiness gating) |
+| Correct end‑to‑end baseline vs the official oracles | **done** | 1 |
+| `float[][]` heap residency (needed `-Xmx768m`) | **done** — `int8` RB2 off‑heap mmap, runs in `-Xmx256m` | 2a |
+| Scalar distance leaving SIMD idle | **evaluated & closed** — SIMD measured slower here; scalar kept (see §7) | 2b |
+| Brute‑force O(n) k‑NN latency | **done** — HNSW graph walk, p99 ≈ 0.145 ms (≈430× vs brute) | 3 |
+| Containerization / HAProxy / 2 instances / 350 MB budget / official k6 | open — jar still bundles the `.gz`; `hnsw.bin` ≈460 MB needs compaction | 4 |
+| JIT warm‑up, no PGO | open | 5 (GraalVM Native Image + PGO; re‑validate Gate A + Wave‑3 gates) |
+| No chunked encoding / pipelining / 4 KB request cap | out of scope by design (the Rinha payload is small and fixed) | — |
+| Readiness implied by a successful bind | acceptable (dataset+graph mapped before bind); proper gating | 4 |
 
-None of these are accidental — each is a Wave 1 simplification with a planned successor.
+None of the open items are accidental — each is a planned successor.
 
 ## 9. Validation methodology
 
-Wave 1's exit criterion is **byte‑identical** agreement with the official oracles in the Rinha specification (`rinha-de-backend-2026/docs/br/REGRAS_DE_DETECCAO.md`), exercised against a real server with the full 3M dataset:
+Each wave keeps the prior gates and adds its own. Wave 3 is accepted only when **all five gates** are green (commands run from `api/`, `--add-modules jdk.incubator.vector`, `-Xmx256m` steady state; the first boot needs `-Xmx2g` to build `hnsw.bin`):
 
-| Oracle | Transaction | Expected response |
-| --- | --- | --- |
-| Legitimate | `tx-1329056812` | `{"approved":true,"fraud_score":0.0}` |
-| Fraud | `tx-3330991687` | `{"approved":false,"fraud_score":1.0}` |
+| Gate | What it checks | Threshold | Wave‑3 result |
+| --- | --- | --- | --- |
+| 1 — e2e | real server, the two official oracles | exact | `tx-1329056812`→`{"approved":true,"fraud_score":0.0}`, `tx-3330991687`→`{"approved":false,"fraud_score":1.0}` ✓ |
+| 2 — sanity | `Gate2Int8 2000` vs the frozen Wave‑1 `float` baseline | ≥ 99 % (now *approximate* — HNSW is not exact) | 1993/2000 = **99.65 %** ✓ |
+| 3a — recall | `RecallHnsw` recall@5 vs the brute‑force int8 oracle | ≥ 95 % | **96.89 %** @ `ef_search=50` ✓ |
+| 3b — decision | approved‑agreement vs the brute oracle | ≥ 99 % | **99.90 %** (FP=1 FN=1) ✓ |
+| 4 — perf | `BenchHnsw` p50/p99 HNSW vs brute | measurement (no fixed threshold; p99<1 ms is Wave 5's goal) | HNSW p99 **0.145 ms** vs brute 43.8 ms, **≈430×** ✓ |
+
+`ef_search` stays at the default **50** (both Gate 3a and 3b pass with margin — no tuning needed). The brute‑force int8 scan is **retained** in `HnswIndex.top5Brute` as the recall oracle and must not be deleted.
 
 Reproduce:
 
 ```bash
 cd api
-./mvnw clean package -DskipTests
-# dataset at src/main/resources/references.json.gz
-java -Xmx768m --add-modules jdk.incubator.vector -jar target/api.jar 9999
-# in another shell — readiness, then the legitimate oracle (full payload in README "Try it"):
-curl -s http://localhost:9999/ready -o /dev/null -w '%{http_code}\n'        # => 200
-curl -s -X POST http://localhost:9999/fraud-score \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"tx-1329056812","transaction":{"amount":41.12,"installments":2,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":82.24,"tx_count_24h":3,"known_merchants":["MERC-003","MERC-016"]},"merchant":{"id":"MERC-016","mcc":"5411","avg_amount":60.25},"terminal":{"is_online":false,"card_present":true,"km_from_home":29.2331036248},"last_transaction":null}'
+./mvnw -q clean package
+# first boot only — builds hnsw.bin (minutes):
+java -Xmx2g  --add-modules jdk.incubator.vector -jar target/api.jar 9999
+# steady state:
+java -Xmx256m --add-modules jdk.incubator.vector -jar target/api.jar 9999
+curl -s http://localhost:9999/ready -o /dev/null -w '%{http_code}\n'                       # => 200
+curl -s -X POST http://localhost:9999/fraud-score -H 'Content-Type: application/json' \
+  -d '{"id":"tx-1329056812","transaction":{"amount":41.12,"installments":2,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":82.24,"tx_count_24h":3,"known_merchants":["MERC-003","MERC-016"]},"merchant":{"id":"MERC-016","mcc":"5411","avg_amount":60.25},"terminal":{"is_online":false,"card_present":true,"km_from_home":29.23},"last_transaction":null}'
 # => {"approved":true,"fraud_score":0.0}
+# offline gates:
+java -Xmx256m --add-modules jdk.incubator.vector -cp target/classes:target/test-classes org.fraudDetection.Gate2Int8  2000
+java -Xmx256m --add-modules jdk.incubator.vector -cp target/classes:target/test-classes org.fraudDetection.RecallHnsw 2000 50
+java -Xmx256m --add-modules jdk.incubator.vector -cp target/classes:target/test-classes org.fraudDetection.BenchHnsw  2000
 ```
 
-The build‑tutorials ([`TUTORIAL_SERVER_NIO.md`](TUTORIAL_SERVER_NIO.md), [`TUTORIAL_JSON_KNN.md`](TUTORIAL_JSON_KNN.md)) define intermediate test points (per‑component checks) that gate each stage before the end‑to‑end oracle test:
-
-- TP1 — `ConnectionState` buffer/array sizes (14 / 5 / 5)
-- TP2 — `MmapDataset` loads 100 (sanity) then 3M vectors
-- TP3 — `DistanceFunctions.sqDist` known values
-- TP4 — `FraudRequestParser` produces the oracle's 14‑D vector
-- TP5 — `HnswIndex` finds the exact match (distance 0.0) for a dataset vector
-- TP6 — the six canned responses compile and serialize correctly
-- §10 — the two end‑to‑end oracles above
-
-A 100‑entry `example-references.json` (the first 100 rows of the full dataset, same `{"vector":[14 floats],"label":"legit|fraud"}` shape) is committed for fast sanity checks without the 3M file.
+The build tutorials ([`TUTORIAL_JSON_KNN.md`](TUTORIAL_JSON_KNN.md), [`TUTORIAL_INT8_QUANT.md`](TUTORIAL_INT8_QUANT.md), [`TUTORIAL_SIMD.md`](TUTORIAL_SIMD.md), [`TUTORIAL_HNSW.md`](TUTORIAL_HNSW.md)) define per‑component test points that gate each stage before the end‑to‑end oracles. The frozen `float` baseline (`docs/baselines/onda1-approved-2000.txt`) and a 100‑entry `example-references.json` are committed for fast checks without the 3M file. `references.bin` and `hnsw.bin` are gitignored and regenerated on first boot.
 
 ## 10. References
 
@@ -292,11 +320,11 @@ A 100‑entry `example-references.json` (the first 100 rows of the full dataset,
 - [`RINHA_PLAN.md`](RINHA_PLAN.md) — the 5‑wave plan and locked stack (PT‑BR)
 - [`CONCEITOS.md`](CONCEITOS.md) — concepts: NIO, HNSW, quantization, native image (PT‑BR)
 - [`IMPACTO.md`](IMPACTO.md) — score‑impact analysis of each decision (PT‑BR)
-- [`TUTORIAL_SERVER_NIO.md`](TUTORIAL_SERVER_NIO.md) / [`TUTORIAL_JSON_KNN.md`](TUTORIAL_JSON_KNN.md) — hands‑on build tutorials (PT‑BR)
+- [`TUTORIAL_JSON_KNN.md`](TUTORIAL_JSON_KNN.md) / [`TUTORIAL_INT8_QUANT.md`](TUTORIAL_INT8_QUANT.md) / [`TUTORIAL_SIMD.md`](TUTORIAL_SIMD.md) / [`TUTORIAL_HNSW.md`](TUTORIAL_HNSW.md) — hands‑on build tutorials (PT‑BR)
 - [`tecnologias/`](tecnologias/) — technology reference notes (PT‑BR)
 - Rinha de Backend 2026 specification: <https://github.com/zanfranceschi/rinha-de-backend-2026>
-- HNSW (Wave 3 reference): Malkov & Yashunin, *Efficient and robust approximate nearest neighbor search using HNSW graphs*, <https://arxiv.org/abs/1603.09320>
+- HNSW: Malkov & Yashunin, *Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs*, <https://arxiv.org/abs/1603.09320>
 
 ---
 
-*This document describes the system as built at the close of Wave 1. When a wave changes the implementation, update the affected component sections and the §1 naming table in the same change.*
+*This document describes the system as built at the close of Wave 3 (HNSW). When a wave changes the implementation, update the affected component sections, the §1 naming table, and §8/§9 in the same change.*
