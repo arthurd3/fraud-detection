@@ -1030,7 +1030,60 @@ Cada onda é uma **mini-aula**. Pré-requisitos linkam para `CONCEITOS.md`. Risc
 
 ---
 
-### 9.5 Onda 5 — GraalVM Native Image + PGO 🔴
+### 9.5 Onda 5 — GraalVM Native Image + PGO ✅ (CONCLUÍDA + VALIDADA 2026‑05‑18)
+
+> ✅ **As‑built 2026‑05‑18 (Onda 5 — CONCLUÍDA, 4 gates verdes).** Validada
+> on‑device (Docker + builder **Oracle GraalVM 21** já em cache local; a
+> reconciliação Mandrel→Oracle/GFTC está em §5.2 nota 2026‑05‑18 e
+> `docs/tecnologias/02-graalvm-native-image.md` — **não repetir aqui**). Binário
+> nativo AOT **12 MB** (`distroless/base-debian12`, entrypoint `/app/api 9999`,
+> imagem ≈399 MB = 12 MB binário + 365 MB índice RO embutido + glibc
+> distroless). Evidência de build: `Graal compiler: optimization level: 3,
+> target machine: x86-64-v3, PGO: user-provided` (consome `default.iprof`
+> offline; `--no-fallback`). **`-march` corrigido v2→v3** (Haswell/AVX2, §1.7).
+>
+> **Gate A — nota honesta (Vector API removida).** O `sqDistI8` SIMD
+> (`jdk.incubator.vector`) foi **REMOVIDO** de `DistanceFunctions.java` (e os
+> testes `DistEquivI8`/`BenchSearch`): seus campos `static VectorSpecies`
+> puxam `VectorSupport.getMaxLaneCount` e **quebram o LINK do Native Image**.
+> Era **código morto desde a Onda 2b** (0 callers; SIMD 3,8× mais lento;
+> produção sempre usou `sqDistI8Scalar`). `sqDistI8Scalar` é
+> **byte‑idêntico ao HEAD HotSpot** ⇒ o Gate B prova comportamento de
+> produção inalterado. O invariante "ZERO mudança Java" passa a ser
+> honestamente **"ZERO mudança de comportamento de produção"** (o passo 7 do
+> Mapa abaixo — validar intrinsics Vector API — deixa de se aplicar: não há
+> mais SIMD a validar).
+>
+> **Gate C — reconciliado à semântica de cgroup** (mesma reconciliação da
+> Onda 4a Gate 3 / 4b Gate 2): `VmHWM ≈ 378 MB/inst` é o **mmap
+> file‑backed reclamável** do índice RO embutido (`hnsw.bin` 314 MB +
+> `references.bin` 51 MB ≈ 365 MB), **não** o custo anônimo do processo —
+> `docker stats` mostra ~26,6 MiB/inst e **não há `OOMKilled`** sob o
+> cgroup duro de 350 MB (api 159 M×2 + haproxy 32 M), 0 restarts. Isto é
+> exatamente o "Argumento de memória" do spec §5. O critério literal "RSS
+> por instância < 80 MB" abaixo lê‑se, as‑built, como **`docker stats`/RSS
+> anônimo < 80 MB** (≈26,6 MiB ✅) — `VmHWM` cru não é o número relevante.
+>
+> **Resultados (verbatim):** Gate B — HotSpot `RecallHnsw` recall@5
+> **96,89 %** / approved‑agree **99,90 %** (FP=1 FN=1); `Rbh2Equiv`
+> **0 / 3.000.000**; nativo `/ready`→200 + 2 oráculos byte‑exatos pelo
+> HAProxy LB (`tx-1329056812`→`{"approved":true,"fraud_score":0.0}`,
+> `tx-3330991687`→`{"approved":false,"fraud_score":1.0}`). Gate C — binário
+> **12 MB** (<80 MB), sem `OOMKilled`, `http_errors` **0** @900 RPS, p99
+> **0,59 ms** (sem warmup — AOT, sem JIT). Gate D — k6 oficial ramp 1→900
+> RPS/120 s via LB → `final_score` **4393,85** (≥ baseline HotSpot 4b
+> 3611–4394; iguala a melhor run da 4b), `http_errors` **0**, p99
+> **0,59 ms**, FP=61 FN=103 TP=23934 TN=29960, `failure_rate` **0,3 %**,
+> `p99_score` 3000 (sem corte). Veredito por critério de saída: binário
+> <80 MB ✅; RSS anônimo <80 MB ✅ (cgroup, ver acima); sem warmup ✅;
+> Vector API → **N/A** (removida, código morto); `final_score` Native ≥
+> HotSpot ✅. **Onda 5 é a ÚLTIMA onda técnica — o projeto fecha aqui**
+> (Onda 6 = otimizações opcionais). Pendências outward‑facing (ações do
+> autor, não feitas): `docker push docker.io/arthurd3/rinha-fraud:onda5`;
+> `git push origin main` & `git push origin submission`; PR upstream
+> adicionando `participants/arthurd3.json`. Detalhe completo dos gates em
+> `docs/ARCHITECTURE.md` §9 (subseção "Wave 5"). *Texto original do plano
+> preservado abaixo como histórico de design.*
 
 **Em uma frase**: eliminar warmup, reduzir RSS, maximizar score.
 
@@ -1067,6 +1120,14 @@ Cada onda é uma **mini-aula**. Pré-requisitos linkam para `CONCEITOS.md`. Risc
 ---
 
 ### 9.6 Onda 6 — Otimizações finais (opcional) 🟢
+
+> ✅ **Nota 2026‑05‑18.** O projeto **fechou tecnicamente na Onda 5** (Native +
+> PGO, validada — ver §9.5). A Onda 6 permanece **opcional** e **não
+> implementada**: nada aqui é necessário para a entrega. Itens migrados/úteis:
+> eliminar a alocação `takeTop5` (drenar para scratch reusado em
+> `HnswScratch`) — era listado como candidato "Onda 5" no `ARCHITECTURE.md`
+> §5, mas a Onda 5 foi puramente AOT+PGO (preservou comportamento, Gate B),
+> então passa a ser item de Onda 6.
 
 - Substituir `com.sun.net.httpserver` paths residuais por NIO 100%.
 - Tunar HNSW (M, ef_construction, ef_search) por grid search.
@@ -1161,6 +1222,18 @@ A cada onda significativa, salvar:
 - Sempre buildar com `-Dgraal.PrintCompilation=true | grep -i vector`.
 - Manter teste JMH que falha se distância isolada > X µs.
 - Usar **Oracle GraalVM 21** (não bleeding edge 22/23; Mandrel/CE não tem PGO — ver §5.2 nota 2026-05-18).
+
+> ✅ **As‑built 2026‑05‑18 (Onda 5) — resolvido por REMOÇÃO, não por
+> fallback.** Esta armadilha não se materializou como "regressão silenciosa":
+> na verdade o `sqDistI8` SIMD **quebrava o LINK do Native Image** (campos
+> `static VectorSpecies` → `VectorSupport.getMaxLaneCount`). Como era
+> **código morto desde a Onda 2b** (0 callers; produção e build sempre
+> usaram `sqDistI8Scalar`, que era 3,8× mais rápido para este shape
+> 14/16‑lane no HotSpot/AVX2), a Onda 5 simplesmente **deletou** `sqDistI8`
+> (+ testes `DistEquivI8`/`BenchSearch`). Não há mais SIMD no projeto ⇒
+> esta seção é histórica; `sqDistI8Scalar` byte‑idêntico ao HEAD HotSpot
+> garante comportamento inalterado (Gate B). O fallback "Mandrel 21"
+> citado em §9.5 ("Se algo der errado") **não foi necessário**.
 
 ### 12.2 `com.sun.net.httpserver` não é descartável
 
@@ -1425,12 +1498,16 @@ Termos técnicos usados no plano. Para tutorial completo de cada conceito, ver `
 |---|---|---|---|
 | 2026-05-04 | Stack inicial conforme §5 | Plan agent + análise de budget | Travado para Onda 1 |
 | 2026-05-04 | Estrutura 3 arquivos (RINHA_PLAN + CONCEITOS + IMPACTO) | Pedagogia separada de execução | Vigente |
+| 2026-05-18 | Builder = **Oracle GraalVM 21** (GFTC, tem PGO) — não Mandrel/CE | "Mandrel + PGO" era contraditório (PGO é Oracle‑only); GFTC é grátis em produção | ✅ Aplicado e validado (Onda 5) — ver §5.2 nota |
+| 2026-05-18 | **Remover** `sqDistI8` SIMD (+ testes `DistEquivI8`/`BenchSearch`) | Campos `static VectorSpecies` quebram o link do Native Image; código morto desde Onda 2b (0 callers, 3,8× mais lento) | ✅ Removido (Onda 5); `sqDistI8Scalar` byte‑idêntico ⇒ comportamento inalterado (Gate B) |
+| 2026-05-18 | **Onda 5 CONCLUÍDA + VALIDADA** — 4 gates verdes on‑device | Native AOT + PGO: sem warmup, `final_score` 4393,85 @ p99 0,59 ms, `http_errors` 0, sem `OOMKilled` | ✅ **Projeto fecha tecnicamente na Onda 5** (Onda 6 = opcional). `docker push`/`git push`/PR = ações pendentes do autor |
 
 ### B. Scores por onda
 
 | Onda | Data | p50 | p95 | p99 | RSS total | final_score | Notas |
 |---|---|---|---|---|---|---|---|
-| - | - | - | - | - | - | - | - |
+| 4b | 2026-05-18 | — | — | — | pico 103 MiB / 350 | 3611–4394 | HotSpot conteinerizado, HAProxy `mode tcp` + 2 inst.; live‑daemon |
+| **5** | **2026-05-18** | — | — | **0,59 ms** | sem `OOMKilled` (cgroup 350 MB; `docker stats` ~26,6 MiB/inst) | **4393,85** | ✅ Native AOT 12 MB + PGO, **sem warmup**, `http_errors` 0; iguala melhor run 4b. `sqDistI8` SIMD removido (código morto, quebrava o link). **Fecha o projeto** |
 
 ### C. Notas qualitativas
 

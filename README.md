@@ -5,9 +5,10 @@
 ![Java](https://img.shields.io/badge/Java-21%20LTS-007396)
 ![Build](https://img.shields.io/badge/build-Maven%20(wrapper)-C71A36)
 ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-success)
-![Status](https://img.shields.io/badge/Waves%201--4b-complete%20%E2%9C%94-success)
+![Status](https://img.shields.io/badge/Waves%201--5-complete%20%E2%9C%94-success)
+![Native](https://img.shields.io/badge/GraalVM%20Native%20%2B%20PGO-final__score%204393-success)
 
-**Status:** Waves 1–4b complete — `int8` off‑heap mmap dataset + a hand‑rolled **HNSW** index + **RBH2** lossless compaction, **containerized**. `POST /fraud-score` validated end‑to‑end against both official oracles; recall@5 96.89 % / approved‑agreement 99.90 %; HNSW p99 ≈ 0.145 ms (≈430× vs brute). Wave 4a proved the **350 MB budget** (147 MiB / 2 inst. under a `systemd-run` cgroup proxy); **Wave 4b containerized it** — a public baked image + HAProxy `mode tcp` + 2 instances in `docker compose` (exactly **1.0 CPU / 350 MB**), validated on a live Docker daemon: real peak **103 MiB**, `OOMKilled=false`, official k6 `final_score` **3611–4394** (HotSpot). The `docker push` + upstream PR are the author's outward‑facing steps. Wave 5 (GraalVM native) is on the roadmap below.
+**Status:** Waves 1–5 **complete** — `int8` off‑heap mmap dataset + a hand‑rolled **HNSW** index + **RBH2** lossless compaction, **containerized**, now a **GraalVM Native Image + PGO** AOT binary. `POST /fraud-score` validated end‑to‑end against both official oracles; recall@5 96.89 % / approved‑agreement 99.90 %. Wave 4a proved the **350 MB budget** (147 MiB / 2 inst. under a `systemd-run` cgroup proxy); Wave 4b containerized it (a public baked image + HAProxy `mode tcp` + 2 instances in `docker compose`, exactly **1.0 CPU / 350 MB**; live‑daemon `final_score` **3611–4394** HotSpot). **Wave 5 (validated 2026‑05‑18, on‑device with the Oracle GraalVM 21 builder)** turned it into a **12 MB AOT native binary** with PGO — **no JIT warm‑up**: official k6 `final_score` **4393.85** at p99 **0.59 ms**, `http_errors` 0, no `OOMKilled` under the hard 350 MB cgroup. The dead `sqDistI8` SIMD path was removed (it broke the Native link; 0 callers since Wave 2b — see [ARCHITECTURE.md §4](docs/ARCHITECTURE.md#4-component-reference)); `sqDistI8Scalar` is byte‑identical, so production behaviour is unchanged (Gate B). **Wave 5 is the last technical wave — the project closes here** (Wave 6 = optional). The `docker push`, `git push`, and upstream PR are the author's outward‑facing steps.
 
 ---
 
@@ -54,7 +55,7 @@ These constraints are the reason for every design decision in this repository.
 | --- | --- |
 | **By hand** | No web framework, no JSON library, no vector‑search library. The HTTP/1.1 parser, the JSON‑to‑vector parser, the dataset loader and the k‑NN search are all hand‑rolled. The only runtime dependency is the JDK. |
 | **Performance‑first** | A single‑threaded NIO reactor, off‑heap direct buffers, an allocation‑free request path (no `String`, no boxing, no intermediate objects), and pre‑computed canned responses. |
-| **Measure, then optimize** | Wave 1 shipped the *correct* baseline (brute‑force float32); every later wave is measured against it. Waves 2a/2b (int8 + off‑heap mmap; SIMD evaluated and **rejected for the hot path** — 3.8× slower for this shape) and Wave 3 (HNSW) are done; native image is Wave 5. |
+| **Measure, then optimize** | Wave 1 shipped the *correct* baseline (brute‑force float32); every later wave is measured against it. Waves 2a/2b (int8 + off‑heap mmap; SIMD evaluated and **rejected for the hot path** — 3.8× slower, later removed in Wave 5 as it broke the Native link), Wave 3 (HNSW), Wave 4 (350 MB budget + containerization) and **Wave 5 (GraalVM Native Image + PGO — done 2026‑05‑18)** are all complete; the project closes at Wave 5. |
 | **Stable interfaces, evolving internals** | `MmapDataset` and `HnswIndex` were named for their *target* design; as of Wave 3 the names **match reality** (off‑heap `int8` mmap; hand‑rolled HNSW) and the public signatures never changed across waves. Documented in [ARCHITECTURE.md](docs/ARCHITECTURE.md). |
 
 ## Architecture at a glance
@@ -156,6 +157,18 @@ docker compose down
 
 `docker compose up` only **uses the baked image** — it never builds and never regenerates the binaries (Wave 4a `tools.Prebuild` did that offline). For the official score: `cd ../rinha-de-backend-2026 && ./run.sh`. Full containerization walkthrough in [docs/TUTORIAL_CONTAINER.md](docs/TUTORIAL_CONTAINER.md).
 
+> ✅ **As‑built (Wave 5, 2026‑05‑18) — this is now a GraalVM Native Image.** The snippet above is the HotSpot (Wave 4b) reference; the **shipped** image is built with the `native` profile via the **Oracle GraalVM 21** builder (GFTC, has PGO) and tagged `:onda5`:
+>
+> ```bash
+> # from fraudDetection/ — native profile, Oracle GraalVM 21 builder, PGO (default.iprof), -march x86-64-v3
+> docker build -t docker.io/arthurd3/rinha-fraud:onda5 .
+> docker compose up -d                 # haproxy + api-1 + api-2 — 1.0 CPU / 350 MB
+> curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9999/ready   # => 200 (no warm-up — AOT binary)
+> docker compose down
+> ```
+>
+> The container runs the **12 MB AOT binary** (`/app/api 9999`, `distroless/base-debian12`) — no JVM, no JIT warm‑up. Full Wave‑5 walkthrough in [docs/TUTORIAL_NATIVE.md](docs/TUTORIAL_NATIVE.md). `docker push docker.io/arthurd3/rinha-fraud:onda5` + the upstream PR remain the author's outward‑facing steps.
+
 ## Verified results
 
 Validated at the close of Wave 3 on a real server with the full 3M dataset at `-Xmx256m` — the five gates (see [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology)):
@@ -169,7 +182,7 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 | 4 | HNSW vs brute latency | ✅ HNSW p50 0.084 ms / **p99 0.145 ms** vs brute p99 43.8 ms — **≈430×** |
 | — | `./mvnw clean package` | ✅ exit 0; no test harness leaks into the jar |
 
-> **Latency:** the HNSW search is already **sub‑millisecond on HotSpot** (p99 ≈ 0.145 ms), so the *search* line of the p99 < 1 ms target is met before Native Image. Waves 4–5 harden the rest of the envelope (containerization + 350 MB budget; native image + PGO). See the performance budget in [ARCHITECTURE.md](docs/ARCHITECTURE.md#6-performance-budget).
+> **Latency:** the HNSW search is already **sub‑millisecond on HotSpot** (p99 ≈ 0.145 ms), so the *search* line of the p99 < 1 ms target is met before Native Image. Waves 4–5 harden the rest of the envelope (containerization + 350 MB budget; native image + PGO). ✅ **As‑built (Wave 5, 2026‑05‑18):** the native AOT binary serves the official k6 ramp at end‑to‑end p99 **0.59 ms** through the HAProxy LB **with no warm‑up** (`http_errors` 0) — comfortably inside the 1 ms target without the HotSpot JIT. See the performance budget in [ARCHITECTURE.md](docs/ARCHITECTURE.md#6-performance-budget).
 
 **Wave 4b — containerized stack** (live Docker daemon; HAProxy `mode tcp` + 2 instances in `docker compose`, 1.0 CPU / 350 MB):
 
@@ -182,6 +195,17 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 
 > Wave 4b adds **no Java** — it packages and runs the Wave‑4a artifact exactly as the Rinha harness does. Full gate detail in [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology).
 
+**Wave 5 — GraalVM Native Image + PGO** ✅ *validated 2026‑05‑18, on‑device (Docker + the Oracle GraalVM 21 builder image, cached locally)*. AOT binary, **no JIT warm‑up**; builder = **Oracle GraalVM 21** (free for production under GFTC — the locked "Mandrel + PGO" was contradictory: CE/Mandrel has no PGO). The four gates:
+
+| Gate | Check | Result |
+| --- | --- | --- |
+| A | Native Image links; the *only* Java change is excising **dead** SIMD code (`sqDistI8`, 0 callers since Wave 2b — its `static VectorSpecies` fields break the Native link) | ✅ `sqDistI8` + tests `DistEquivI8`/`BenchSearch` removed; `sqDistI8Scalar` **byte‑identical to HotSpot HEAD** ⇒ "ZERO Java change" honestly reinterpreted as **"ZERO production‑behaviour change"** (Gate B is the proof) |
+| B | HotSpot oracles unchanged + native oracles byte‑exact via the HAProxy LB | ✅ HotSpot `RecallHnsw` recall@5 **96.89 %** / approved‑agree **99.90 %** (FP=1 FN=1); `Rbh2Equiv` **0 / 3,000,000**. Native: `/ready` 200, `tx-1329056812`→`{"approved":true,"fraud_score":0.0}`, `tx-3330991687`→`{"approved":false,"fraud_score":1.0}` |
+| C | native binary size; no `OOMKilled` under the hard **350 MB** cgroup; `http_errors`; p99 (no warm‑up) | ✅ binary **12 MB** (< 80 MB); **no `OOMKilled`** (api 159 M×2 + haproxy 32 M), 0 restarts; `http_errors` **0** @ 900 RPS; p99 **0.59 ms** cold (AOT — no JIT); `docker stats` ~26.6 MiB/inst (`VmHWM` ≈378 MB/inst is reclaimable file‑backed mmap of the baked read‑only index, *not* anonymous cost) |
+| D | official k6 `test/test.js` (ramp 1→900 RPS / 120 s) via LB → `final_score` ≥ HotSpot 4b baseline | ✅ `final_score` **4393.85** (matches 4b's best run; ≥ 3611–4394), `http_errors` **0**, p99 **0.59 ms**, FP=61 FN=103 TP=23934 TN=29960, `failure_rate` **0.3 %**, `p99_score` 3000 (no cut) |
+
+> Build evidence: `Graal compiler: optimization level: 3, target machine: x86-64-v3, PGO: user-provided` (`default.iprof` consumed offline; `--no-fallback`). `-march` corrected v2→**v3** (Haswell/AVX2). Image = `distroless/base-debian12`, entrypoint `/app/api 9999`, ≈399 MB (12 MB binary + 365 MB baked index + distroless glibc). **Wave 5 closes the technical roadmap** (Wave 6 = optional). Full gate detail in [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology).
+
 ## Project status & roadmap
 
 | Wave | Goal | Status |
@@ -192,7 +216,8 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 | **3** | Hand‑rolled HNSW index — recall@5 96.89 %, p99 ≈ 0.145 ms (≈430× vs brute) | ✅ **Complete** |
 | **4a** | Fit in 350 MB — `hnsw.bin` RBH2 lossless (int24 + sparse upper) + offline prebuild + `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | ✅ **Complete** |
 | **4b** | Containerization (HotSpot) + HAProxy + official k6 + ≥2 instances + submission | ✅ **Complete** — live‑daemon validated; `docker push`/PR pending |
-| **5** | GraalVM Native Image + PGO (Oracle GraalVM, GFTC) | 📝 Spec + tutorial ready (hand‑impl pending) |
+| **5** | GraalVM Native Image + PGO (Oracle GraalVM 21, GFTC) — AOT 12 MB binary, no JIT warm‑up | ✅ **Complete** — validated 2026‑05‑18; official k6 `final_score` **4393.85** @ p99 **0.59 ms**, `http_errors` 0, no `OOMKilled`. Dead `sqDistI8` SIMD removed (broke the Native link); `sqDistI8Scalar` byte‑identical ⇒ behaviour unchanged. **Closes the project**; `docker push`/`git push`/PR pending |
+| **6** | Optional micro‑optimizations (e.g. eliminating the `takeTop5` drain) | ⚪ Optional — not required; the project is technically complete at Wave 5 |
 
 The full roadmap, with the per‑stage performance reasoning, is in [`docs/RINHA_PLAN.md`](docs/RINHA_PLAN.md) (PT‑BR).
 
@@ -251,9 +276,9 @@ The **`submission`** branch (Wave 4b) is a separate **orphan** branch with exact
 
 ## Tech stack
 
-- **Language/runtime:** Java 21 LTS (HotSpot today; GraalVM Native Image planned for Wave 5)
+- **Language/runtime:** Java 21 LTS — **GraalVM Native Image + PGO** (Oracle GraalVM 21, GFTC), AOT binary as of Wave 5 (HotSpot remains the build/oracle reference)
 - **I/O:** `java.nio` `Selector` — single‑threaded non‑blocking reactor
-- **SIMD:** `jdk.incubator.vector` (Vector API) — on the module path, used from Wave 2
+- **SIMD:** ~~`jdk.incubator.vector` (Vector API)~~ — was explored in Wave 2b but **never wired into production** (3.8× slower for this shape) and **removed in Wave 5** (it broke the GraalVM Native link; the production distance is the scalar `sqDistI8Scalar`)
 - **Build:** Maven via the project wrapper (`./mvnw`); `native` profile uses `native-maven-plugin`
 - **Runtime dependencies:** none
 

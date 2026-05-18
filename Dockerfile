@@ -1,18 +1,17 @@
-# ---- builder: compila o jar (41 KB, sem dataset) ----
-FROM eclipse-temurin:21-jdk AS builder
+# ---- builder: binário nativo AOT (Oracle GraalVM 21 — tem PGO, free GFTC) ----
+FROM container-registry.oracle.com/graalvm/native-image:21 AS builder
 WORKDIR /src
 COPY api/ ./api/
-RUN cd api && ./mvnw -q clean package -DskipTests
+# api/default.iprof versionado (PGO offline — ver docs/TUTORIAL_NATIVE.md §6);
+# o profile `native` consome via --pgo=default.iprof.
+RUN cd api && ./mvnw -q -Pnative -DskipTests package      # => target/api (ELF)
 
-# ---- runtime: jre + jar + binários RBH2 da Onda 4a baked ----
-FROM eclipse-temurin:21-jre AS runtime
+# ---- runtime: distroless glibc + binário + binários RBH2 baked (sem JVM) ----
+FROM gcr.io/distroless/base-debian12 AS runtime
 WORKDIR /app
-COPY --from=builder /src/api/target/api.jar /app/api.jar
+COPY --from=builder /src/api/target/api /app/api
 COPY api/src/main/resources/references.bin /data/references.bin
 COPY api/src/main/resources/hnsw.bin       /data/hnsw.bin
 ENV DATA_PATH=/data
 EXPOSE 9999
-ENTRYPOINT ["java","-DDATA_PATH=/data", \
-  "-Xmx64m","-XX:+UseSerialGC","-XX:MaxMetaspaceSize=64m","-Xss512k", \
-  "-XX:ReservedCodeCacheSize=24m","--add-modules","jdk.incubator.vector", \
-  "-jar","/app/api.jar","9999"]
+ENTRYPOINT ["/app/api","9999"]

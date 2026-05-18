@@ -27,10 +27,8 @@
                 <configuration>
                     <source>21</source>
                     <target>21</target>
-                    <compilerArgs>
-                        <arg>--add-modules</arg>
-                        <arg>jdk.incubator.vector</arg>
-                    </compilerArgs>
+                    <!-- Onda 5: jdk.incubator.vector removido (dead code); o
+                         compilador não precisa mais do módulo. -->
                 </configuration>
             </plugin>
             <plugin>
@@ -55,6 +53,9 @@
     </build>
 
     <profiles>
+        <!-- Onda 5: build nativo FINAL (consome default.iprof via PGO).
+             Requer api/default.iprof presente (gerado offline pelo profile
+             `native-instrument` + k6 oficial — ver TUTORIAL_NATIVE.md §6). -->
         <profile>
             <id>native</id>
             <build>
@@ -77,10 +78,63 @@
                             <mainClass>${main.class}</mainClass>
                             <imageName>api</imageName>
                             <buildArgs>
-                                <buildArg>--enable-preview</buildArg>
-                                <buildArg>--add-modules=jdk.incubator.vector</buildArg>
                                 <buildArg>--no-fallback</buildArg>
                                 <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+                                <!-- distroless/base-debian12 só tem glibc (sem
+                                     libz). GZIPInputStream alcançável → o binário
+                                     linka libz dinâmico. Static-except-libc
+                                     resolve sem inflar a imagem. -->
+                                <buildArg>-H:+StaticExecutableWithDynamicLibC</buildArg>
+                                <buildArg>-O3</buildArg>
+                                <!-- alvo = Mac Mini Late-2014 Haswell/AVX2 (RINHA_PLAN
+                                     §1.7) => x86-64-v3 (NÃO -march=native: builder ≠
+                                     alvo; v2 não tem AVX2 e quebraria o Gate A). -->
+                                <buildArg>-march=x86-64-v3</buildArg>
+                                <buildArg>--gc=serial</buildArg>
+                                <buildArg>-R:MaxHeapSize=64m</buildArg>
+                                <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+                                <buildArg>--pgo=default.iprof</buildArg>
+                            </buildArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <!-- Onda 5: build INSTRUMENTADO (passo 1 do PGO; gera default.iprof
+             ao rodar + workload k6 e receber SIGINT). Sem o flag pgo nem
+             heap apertado (a run de treino e descartavel). -->
+        <profile>
+            <id>native-instrument</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                        <version>${native.maven.plugin.version}</version>
+                        <extensions>true</extensions>
+                        <executions>
+                            <execution>
+                                <id>build-native-instrument</id>
+                                <goals>
+                                    <goal>compile-no-fork</goal>
+                                </goals>
+                                <phase>package</phase>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <mainClass>${main.class}</mainClass>
+                            <imageName>api</imageName>
+                            <buildArgs>
+                                <buildArg>--no-fallback</buildArg>
+                                <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+                                <!-- instrumentado roda no box de dev (CPU
+                                     desconhecido) p/ treinar: compatibility =
+                                     roda em qualquer amd64; o .iprof é
+                                     reutilizável no build final x86-64-v3. -->
+                                <buildArg>-march=compatibility</buildArg>
+                                <buildArg>--gc=serial</buildArg>
+                                <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+                                <buildArg>--pgo-instrument</buildArg>
                             </buildArgs>
                         </configuration>
                     </plugin>

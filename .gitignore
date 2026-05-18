@@ -1,0 +1,4 @@
+### Onda 5 PGO — binário instrumentado intermediário (descartável, ~57MB).
+### Gerado por Dockerfile.instr (--target export); regerável. Não versionar.
+### O profile resultante (api/default.iprof) ESSE sim é versionado.
+_pgo/

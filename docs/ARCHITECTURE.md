@@ -1,6 +1,8 @@
 # Architecture — Fraud Detection API
 
-> Engineering reference for the **as‑built** system, current at the close of **Wave 4b** (containerized — public baked image + HAProxy `mode tcp` + 2 instances in `docker compose`, 1.0 CPU / 350 MB). This document describes what the code *does today*, why it is shaped this way, and where the deliberate simplifications are. The forward‑looking plan lives in [`RINHA_PLAN.md`](RINHA_PLAN.md) (PT‑BR); this document is the canonical description of the current implementation. When a wave changes the implementation, update the affected component sections and the §1 naming table in the same change.
+> Engineering reference for the **as‑built** system, current at the close of **Wave 5** (GraalVM Native Image + PGO — AOT binary, no JIT warm‑up, `final_score` 4393.85). This document describes what the code *does today*, why it is shaped this way, and where the deliberate simplifications are. The forward‑looking plan lives in [`RINHA_PLAN.md`](RINHA_PLAN.md) (PT‑BR); this document is the canonical description of the current implementation. When a wave changes the implementation, update the affected component sections and the §1 naming table in the same change.
+>
+> ✅ **As‑built 2026‑05‑18 — Wave 5 COMPLETE (Native + PGO).** All four gates green, validated on‑device (Docker + the Oracle GraalVM 21 builder image, cached locally). The native binary is **12 MB** (`distroless/base-debian12`, entrypoint `/app/api 9999`); `final_score` **4393.85** at p99 **0.59 ms** with **no warm‑up** (AOT — no JIT) and `http_errors` 0. The Vector‑API SIMD distance was **removed** (it was dead code that broke the Native link — see §4 `DistanceFunctions` and §7); production behaviour is byte‑identical (Gate B). Wave 5 is the **last technical wave — the project closes here** (Wave 6 = optional micro‑optimizations). Outward‑facing steps remain the author's: `docker push docker.io/arthurd3/rinha-fraud:onda5`, `git push origin main`/`submission`, and the upstream PR.
 
 ## Contents
 
@@ -34,6 +36,8 @@ The service exposes two endpoints on a single port (default `9999`):
 The **public method signatures stayed stable** across all waves (`MmapDataset.load`, `HnswIndex.search(ConnectionState)`), so callers never changed while the internals were upgraded wave by wave.
 
 There are **no runtime dependencies** — only the JDK (the `jdk.incubator.vector` module is on the path but the production distance is scalar; see §4 `DistanceFunctions`). There is **one thread**. The request path is allocation‑free except for two small per‑query scratch arrays in the HNSW result drain (see §5).
+
+> ✅ **As‑built 2026‑05‑18 (Wave 5).** The `jdk.incubator.vector` SIMD distance was **removed** entirely (it was dead code — 0 callers since Wave 2b — and its `static VectorSpecies` fields broke the GraalVM Native link; see §4 `DistanceFunctions`). The runtime is now an **AOT native binary** (Oracle GraalVM 21, PGO), still **single‑threaded**, still **zero runtime dependencies**. `sqDistI8Scalar` (the only distance that production ever used) is byte‑identical to the HotSpot HEAD, so behaviour is unchanged (Gate B).
 
 ## 2. The 14‑dimensional feature vector
 
@@ -171,11 +175,14 @@ For each unit: **responsibility**, **interface**, **rationale**.
 - **As‑built:** the RB2 binary (`magic 'R','B','2',0` + `int32 count` + `int32 dims=14`, then `count × 16` int8 records of 14 real + 2 zero pad, then `count` label bytes) is `MappedByteBuffer`‑mapped read‑only. **Self‑bootstrapping:** if `references.bin` is missing or its magic/dims don't match, `load` streams `references.json.gz` once (gzip‑magic auto‑detect `0x1F 0x8B`, hand byte‑parser, no `String`/`Float.parseFloat`), quantizes, writes the RB2 file (`getFD().sync()`), then maps it. `references.bin` is gitignored/regenerable. STRIDE = 16 ⇒ `recBase(i) = 12 + i·16`.
 - **Cost:** ≈51 MB on disk, off‑heap. The server runs in `-Xmx256m` with no OOM — proof the dataset is genuinely off‑heap (a `float[3M][14]` heap copy would be ≈220 MB and would not fit).
 
-### `knn.DistanceFunctions` (40 LOC)
+### `knn.DistanceFunctions` (40 LOC → trimmed in Wave 5)
 
 - **Responsibility:** the distance metric.
-- **Interface:** `static float sqDist(float[],float[])`; `static int sqDistI8(byte[],byte[])` (SIMD); `static int sqDistI8Scalar(byte[],byte[])` (scalar, **production**).
-- **Rationale:** **squared** Euclidean, no `sqrt` (monotonic ⇒ identical ranking). `sqDistI8Scalar` is a 16‑iteration integer loop over the padded record. `sqDistI8` is the Wave‑2b Vector API (`jdk.incubator.vector`) implementation; it is **bit‑identical** to the scalar one (Wave‑2b Gate A) but measured **≈3.8× slower** on HotSpot/AVX2 for this tiny fixed 14/16‑lane shape (`convertShape` B2I cross‑shape not well intrinsified). It is therefore kept **only** as a correctness reference; **all production and build distances use `sqDistI8Scalar`**. This matters most in the build, which evaluates billions of distances.
+- **Interface:** `static float sqDist(float[],float[])`; `static int sqDistI8Scalar(byte[],byte[])` (scalar, **production**). *(Wave 5 removed `sqDistI8` — the SIMD variant — see the as‑built note below.)*
+- **Rationale:** **squared** Euclidean, no `sqrt` (monotonic ⇒ identical ranking). `sqDistI8Scalar` is a 16‑iteration integer loop over the padded record; **all production and build distances use `sqDistI8Scalar`**. This matters most in the build, which evaluates billions of distances.
+- **History:** `sqDistI8` *was* the Wave‑2b Vector API (`jdk.incubator.vector`) implementation; it was **bit‑identical** to the scalar one (Wave‑2b Gate A) but measured **≈3.8× slower** on HotSpot/AVX2 for this tiny fixed 14/16‑lane shape (`convertShape` B2I cross‑shape not well intrinsified), so it was already non‑production from Wave 2b on (kept then only as a correctness reference).
+
+> ✅ **As‑built 2026‑05‑18 (Wave 5) — `sqDistI8` removed; "ZERO Java change" → "ZERO production‑behaviour change".** The `static VectorSpecies` fields in `sqDistI8` pull `jdk.internal.vm.vector.VectorSupport.getMaxLaneCount` at class init, which **breaks the GraalVM Native Image link**. Because `sqDistI8` had **0 callers since Wave 2b** (production and the build always used `sqDistI8Scalar`; the SIMD path was measured 3.8× slower and never wired in), it was **dead code**. Wave 5 therefore *deletes* `sqDistI8` from `DistanceFunctions.java` and removes the tests that referenced it (`DistEquivI8`, `BenchSearch`). The retained `sqDistI8Scalar` is **byte‑identical to the HotSpot HEAD**, so Gate B proves production behaviour is unchanged. The original Wave‑5 invariant "ZERO Java change" is therefore honestly **reinterpreted as "ZERO production‑behaviour change"** — the only Java touched is the excision of code that never ran.
 
 ### `knn.HnswScratch` (66 LOC) — Wave 3
 
@@ -228,7 +235,9 @@ Once a connection is accepted, serving a request allocates **almost nothing** on
 - The HNSW search reuses the **static** `HnswScratch` (versioned visited + heaps + record buffers) — no per‑request `memset`, no graph‑node objects (the graph is a flat mmap of `int`s).
 - Responses are pre‑built `byte[]`; the writer only copies and flips.
 
-**The one honest exception:** `HnswIndex.takeTop5` allocates two small `int[rSize]` arrays (`rSize ≤ ef`, ≈50–200 ints) per query to drain the result max‑heap into ascending order. This is a few hundred bytes of short‑lived garbage per request — orders of magnitude below a young‑gen threshold and far from the per‑request tail‑latency budget — but it is *not* literally zero‑alloc. Eliminating it (drain into a reused scratch on `HnswScratch`) is a candidate micro‑optimization for Wave 5; it was left as‑is in Wave 3 because Gate 4 already shows p99 ≈ 0.145 ms with it. The only other allocation is the **one‑time** dataset/graph load at startup.
+**The one honest exception:** `HnswIndex.takeTop5` allocates two small `int[rSize]` arrays (`rSize ≤ ef`, ≈50–200 ints) per query to drain the result max‑heap into ascending order. This is a few hundred bytes of short‑lived garbage per request — orders of magnitude below a young‑gen threshold and far from the per‑request tail‑latency budget — but it is *not* literally zero‑alloc. Eliminating it (drain into a reused scratch on `HnswScratch`) is a candidate micro‑optimization; it was left as‑is in Wave 3 because Gate 4 already shows p99 ≈ 0.145 ms with it. The only other allocation is the **one‑time** dataset/graph load at startup.
+
+> ✅ **As‑built 2026‑05‑18 (Wave 5).** Wave 5 (Native + PGO) **did not** touch this drain — it was an AOT‑compile + profile‑guided wave, behaviour‑preserving by design (Gate B). The native run still shows p99 **0.59 ms** with the `takeTop5` allocation in place (the slightly higher absolute vs HotSpot's 0.145 ms is the AOT/no‑JIT trade‑off, still far inside the 1 ms target with **no warm‑up**). Removing this allocation is now a **Wave 6 (optional)** micro‑optimization, not a Wave‑5 item.
 
 ## 6. Performance budget
 
@@ -236,8 +245,9 @@ The target (from [`RINHA_PLAN.md`](RINHA_PLAN.md)) is **p99 < 1 ms**, i.e. ≈2.
 
 | Path | p50 | p99 |
 | --- | --- | --- |
-| HNSW search (Wave 3, production) | ≈ 0.084 ms | ≈ 0.145 ms |
+| HNSW search (Wave 3, production, HotSpot) | ≈ 0.084 ms | ≈ 0.145 ms |
 | Brute‑force int8 scan (Wave 2b, retained as oracle) | ≈ 36.1 ms | ≈ 43.8 ms |
+| End‑to‑end via HAProxy LB (✅ Wave 5, **native AOT**, official k6, no warm‑up) | — | ≈ **0.59 ms** |
 
 The HNSW search is already **sub‑millisecond on HotSpot** — the search line of the budget is met before Native Image. The remaining waves harden the rest of the envelope rather than the search:
 
@@ -246,7 +256,7 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 - **Wave 3** — HNSW turned the O(n) scan into a graph walk visiting ~hundreds of vectors. **This is the latency lever.**
 - **Wave 4a** — *done*: `hnsw.bin` RBH2 (int24 + sparse upper, lossless ≈300 MB), `api.jar` 41 KB (no bundled dataset), `DATA_PATH`, offline `tools.Prebuild`; **proven** 2 instances + shared reclaimable mmap peak **147 MiB** under a 350 MiB cgroup (`systemd-run` faithful proxy).
 - **Wave 4b** — *done*: multi‑stage HotSpot image (`eclipse-temurin:21-jdk` builder → `21-jre` runtime) with the RBH2 binaries **baked** (build context 365 MB — the 459 MB RBH1 golden is `.dockerignore`d), HAProxy `mode tcp` + 2 instances in `docker compose` summing to exactly **1.0 CPU / 350 MB** (haproxy 0.15/32M + api‑1/api‑2 0.425/159M each). Validated on a live Docker daemon: real peak **103 MiB / 350**, `OOMKilled=false`, official k6 `final_score` **3611–4394** (HotSpot, within the 3000–4500 budget). Public baked image + orphan `submission` branch (3 files, no code); `docker push` and the upstream PR are the author's outward‑facing steps.
-- **Wave 5** — *spec + tutorial ready (hand‑impl pending)*: GraalVM Native Image + PGO (builder = **Oracle GraalVM 21, GFTC free** — the locked "Mandrel + PGO" was contradictory: CE/Mandrel has no PGO) removes JIT warm‑up and trims constant factors; **must re‑validate** Wave‑2b Gate A and the Wave‑3/4a/4b gates (silent Vector‑API→scalar regression risk). Spec: `docs/superpowers/specs/2026-05-18-onda5-native-design.md`; tutorial: `docs/TUTORIAL_NATIVE.md`.
+- **Wave 5** — ✅ *done (2026‑05‑18)*: GraalVM Native Image + PGO (builder = **Oracle GraalVM 21, GFTC free** — the locked "Mandrel + PGO" was contradictory: CE/Mandrel has no PGO). The AOT binary removes JIT warm‑up entirely: official k6 `final_score` **4393.85** at p99 **0.59 ms** with **no warm‑up**, `http_errors` 0. The dead `sqDistI8` SIMD path was removed (it broke the Native link; 0 callers since Wave 2b — Wave‑2b Gate A reinterpreted, see §7); `sqDistI8Scalar` byte‑identical ⇒ Gate B proves the Wave‑3/4a/4b numbers unchanged. Binary **12 MB**; image ~399 MB (12 MB binary + 365 MB baked read‑only index + distroless glibc). Build evidence: `Graal compiler: optimization level: 3, target machine: x86-64-v3, PGO: user-provided` (`default.iprof` consumed; `-march` corrected v2→v3, Haswell/AVX2, RINHA_PLAN §1.7). Spec: `docs/superpowers/specs/2026-05-18-onda5-native-design.md`; tutorial: `docs/TUTORIAL_NATIVE.md`. **This closes the technical roadmap** (Wave 6 = optional).
 
 ## 7. Key design decisions & trade‑offs
 
@@ -258,7 +268,7 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 | Pre‑computed canned responses (6) | `fraud_score` has only 6 possible values | `approved`/`Content-Length` fixed at class‑init; must stay in sync with `score < 0.6` |
 | Squared Euclidean (no `sqrt`) | Monotonic ⇒ identical ranking, cheaper | Distances are not true magnitudes (irrelevant for k‑NN ranking) |
 | `int8` global‑symmetric quantization (Wave 2a) | ~4× smaller, cache‑friendly, integer distance, off‑heap mmap | Tiny quantization error; sanity gate is now *approximate* vs the `float` baseline (≥99 %, not exact) |
-| **Scalar distance, SIMD rejected for the hot path** (Wave 2b) | The Vector API impl is bit‑identical but ≈3.8× slower for this tiny fixed shape on HotSpot/AVX2; build does billions of distances | `sqDistI8` kept only as a correctness reference; revisit under Native Image (Wave 5) |
+| **Scalar distance, SIMD rejected for the hot path** (Wave 2b) | The Vector API impl is bit‑identical but ≈3.8× slower for this tiny fixed shape on HotSpot/AVX2; build does billions of distances | `sqDistI8` kept only as a correctness reference — ✅ **Wave 5 (2026‑05‑18) removed it entirely**: its `static VectorSpecies` fields break the GraalVM Native link and it had 0 callers since Wave 2b (dead code). `sqDistI8Scalar` byte‑identical ⇒ Gate B unchanged; the Wave‑2b Gate A is reinterpreted as "ZERO production‑behaviour change" (see §4) |
 | **HNSW with the Alg.4 heuristic** (Wave 3) | The O(3M) scan was the latency wall; the heuristic preserves navigability ⇒ recall@5 96.89 % at the default `ef=50` | HNSW is *approximate* — guarded by Gate 3a (recall ≥95 %) and Gate 3b (approved‑agreement ≥99 %) vs the retained brute oracle |
 | Self‑bootstrapping mmap files (RB2, `hnsw.bin`) | First boot derives the binaries; later boots map instantly; binaries gitignored/regenerable | First boot is minutes + `-Xmx2g`; offline pre‑build **delivered in Wave 4a** (`tools.Prebuild`) |
 | Fixed‑seed level RNG | Reproducible graph ⇒ reproducible gates | The graph is one deterministic sample of the HNSW distribution |
@@ -275,11 +285,11 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 | Brute‑force O(n) k‑NN latency | **done** — HNSW graph walk, p99 ≈ 0.145 ms (≈430× vs brute) | 3 |
 | 350 MB budget — jar bundled the `.gz`; `hnsw.bin` ≈460 MB > 350 MB alone | **done (4a)** — RBH2 lossless ≈300 MB, jar 41 KB, offline prebuild, `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | 4a |
 | Containerization / HAProxy / 2 instances / official k6 / `submission` | **done (4b)** — baked public image, HAProxy `mode tcp`, `docker compose` 1.0 CPU/350 MB; live‑daemon validated: peak 103 MiB, no OOM, k6 `final_score` 3611–4394; `submission` branch built (`docker push`/PR remain author steps) | 4b |
-| JIT warm‑up, no PGO | **spec + tutorial ready (hand‑impl pending)** | 5 (GraalVM Native Image + PGO — Oracle GraalVM GFTC; re‑validate Gate A + Wave‑3/4a/4b gates) |
+| JIT warm‑up, no PGO | **done (5)** — GraalVM Native Image + PGO (Oracle GraalVM 21, GFTC). AOT binary 12 MB, **no warm‑up**, official k6 `final_score` **4393.85** @ p99 **0.59 ms**, `http_errors` 0; dead `sqDistI8` SIMD removed (broke the Native link, 0 callers — Gate A reinterpreted), `sqDistI8Scalar` byte‑identical ⇒ Gate B unchanged. **Closes the technical roadmap.** | 5 |
 | No chunked encoding / pipelining / 4 KB request cap | out of scope by design (the Rinha payload is small and fixed) | — |
 | Readiness implied by a successful bind | acceptable (dataset+graph mapped before bind); proper gating | 4 |
 
-None of the open items are accidental — each is a planned successor.
+None of the open items are accidental — each is a planned successor. **With Wave 5 done, the technical roadmap is closed**; the only remaining work is Wave 6 (optional micro‑optimizations — e.g. eliminating the `takeTop5` drain, §5) and the author's outward‑facing publish steps (`docker push docker.io/arthurd3/rinha-fraud:onda5`, `git push origin main`/`submission`, upstream PR adding `participants/arthurd3.json`).
 
 ## 9. Validation methodology
 
@@ -338,6 +348,32 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9999/ready          # 
 docker compose down
 ```
 
+### Wave 5 — GraalVM Native Image + PGO ✅ ([`TUTORIAL_NATIVE.md`](TUTORIAL_NATIVE.md)) — validated 2026‑05‑18
+
+Wave 5 swaps the HotSpot JRE runtime for an **AOT native binary** built with **Oracle GraalVM 21** (`container-registry.oracle.com/graalvm/native-image:21`, free for production under GFTC — the originally‑locked "Mandrel + PGO" was contradictory: PGO is Oracle‑GraalVM‑only, CE/Mandrel has no PGO; this reconciliation was committed earlier in [`tecnologias/02-graalvm-native-image.md`](tecnologias/02-graalvm-native-image.md)). PGO is offline + versioned (`default.iprof` consumed at build). The image is `distroless/base-debian12`, entrypoint `/app/api 9999`, ≈399 MB (12 MB native binary + 365 MB baked read‑only index + distroless glibc). Build evidence: `Graal compiler: optimization level: 3, target machine: x86-64-v3, PGO: user-provided`, `--no-fallback` (no fallback image); `-march` was corrected v2→**v3** (Haswell/AVX2, [`RINHA_PLAN.md`](RINHA_PLAN.md) §1.7).
+
+Closure needs all four gates green on‑device (Docker + the Oracle GraalVM 21 builder, cached locally). **Gate A is reinterpreted honestly** (see §4 `DistanceFunctions`): the SIMD `sqDistI8` was *dead code since Wave 2b* (0 callers; 3.8× slower; production always used `sqDistI8Scalar`) whose `static VectorSpecies` fields **break the GraalVM Native link**, so it was *removed* (with tests `DistEquivI8`/`BenchSearch`). `sqDistI8Scalar` is **byte‑identical to the HotSpot HEAD**, so the "ZERO Java change" invariant becomes **"ZERO production‑behaviour change"** — Gate B proves it. **Gate C is reconciled to cgroup semantics** (same reconciliation as Wave‑4a Gate 3 / Wave‑4b Gate 2): `VmHWM ≈ 378 MB/inst` is the *reclaimable file‑backed mmap* of the baked read‑only index (`hnsw.bin` 314 MB + `references.bin` 51 MB ≈ 365 MB), **not** the process's anonymous cost — `docker stats` shows ~26.6 MiB/inst and there is **no `OOMKilled`** under the hard 350 MB cgroup. This is exactly the spec §5 "Argumento de memória".
+
+| Gate | What it checks | Threshold | Wave‑5 result |
+| --- | --- | --- | --- |
+| A — link/behaviour (reinterpreted) | Native Image links; the *only* Java change is excising dead SIMD code | builds + links; `sqDistI8Scalar` byte‑identical to HotSpot HEAD | ✅ `sqDistI8` removed (broke the link, 0 callers since Wave 2b); `sqDistI8Scalar` byte‑identical ⇒ "ZERO production‑behaviour change" (Gate B is the proof) |
+| B — correctness | HotSpot oracles unchanged + native oracles byte‑exact via HAProxy LB | `RecallHnsw`/`Rbh2Equiv` unchanged; 2 oracles exact | ✅ HotSpot `RecallHnsw` recall@5 **96.89 %** / approved‑agree **99.90 %** (FP=1 FN=1); `Rbh2Equiv` **0 / 3,000,000**. Native: `/ready`→200, `tx-1329056812`→`{"approved":true,"fraud_score":0.0}`, `tx-3330991687`→`{"approved":false,"fraud_score":1.0}` |
+| C — resources (cgroup semantics) | native binary size; no `OOMKilled` under the hard 350 MB cgroup; `http_errors`; p99 (no warm‑up) | binary < 80 MB; no OOM; 0 errors; p99 < 1 ms cold | ✅ binary **12 MB**; **no `OOMKilled`** (api 159 M×2 + haproxy 32 M), 0 restarts; `http_errors` **0** @ 900 RPS; p99 **0.59 ms** (no warm‑up — AOT, no JIT); `docker stats` ~26.6 MiB/inst (`VmHWM` ≈378 MB/inst is reclaimable mmap of the baked index, not anon) |
+| D — official k6 | `test/test.js` ramp 1→900 RPS / 120 s via LB → `final_score` ≥ HotSpot 4b baseline | ≥ 3611–4394 (4b range) | ✅ `final_score` **4393.85** (matches 4b's best run), `http_errors` **0**, p99 **0.59 ms**, FP=61 FN=103 TP=23934 TN=29960, `failure_rate` **0.3 %**, `p99_score` 3000 (no cut) |
+
+Wave 5 is the **last technical wave — the project closes here** (Wave 6 = optional micro‑optimizations). Reproduce:
+
+```bash
+# from fraudDetection/ (Dockerfile native profile; Oracle GraalVM 21 builder, GFTC; binaries baked from Wave 4a)
+docker build -t docker.io/arthurd3/rinha-fraud:onda5 .         # PGO: user-provided (default.iprof), -march x86-64-v3
+docker compose up -d
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9999/ready          # => 200
+# Gate D (official k6, sibling repo): cd ../rinha-de-backend-2026 && ./run.sh
+docker compose down
+```
+
+Outward‑facing steps remain the author's: `docker push docker.io/arthurd3/rinha-fraud:onda5`; `git push origin main` & `git push origin submission`; the upstream PR adding `participants/arthurd3.json`.
+
 ## 10. References
 
 - [`README.md`](../README.md) — project overview, quickstart, status
@@ -351,4 +387,4 @@ docker compose down
 
 ---
 
-*This document describes the system as built at the close of Wave 4b (containerized — baked public image + HAProxy `mode tcp` + 2 instances, 1.0 CPU / 350 MB). When a wave changes the implementation, update the affected component sections, the §1 naming table, and §8/§9 in the same change.*
+*This document describes the system as built at the close of **Wave 5** (GraalVM Native Image + PGO — Oracle GraalVM 21/GFTC; AOT binary 12 MB, no JIT warm‑up, official k6 `final_score` 4393.85 @ p99 0.59 ms; the dead `sqDistI8` SIMD path removed, `sqDistI8Scalar` byte‑identical ⇒ behaviour unchanged). **Wave 5 closes the technical roadmap** (Wave 6 = optional). When a wave changes the implementation, update the affected component sections, the §1 naming table, and §8/§9 in the same change.*

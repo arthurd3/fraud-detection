@@ -17,6 +17,38 @@
 > mudança de Java.** Depois só fechamento/submissão (Onda 6 = otimizações
 > opcionais).
 
+> ✅ **As-built — validação 2026-05-18 (Gates A–D verdes).** Implementação à
+> mão validada nesta máquina (Docker + builder Oracle GraalVM 21 cacheado;
+> CE-local irrelevante — build é via Docker). Três reconciliações honestas
+> (design preservado; notas datadas, padrão do projeto):
+> 1. **"ZERO mudança de Java" → "ZERO mudança de comportamento de produção".**
+>    O `sqDistI8` (SIMD `jdk.incubator.vector`) foi **removido** de
+>    `DistanceFunctions.java` (+ testes `DistEquivI8`/`BenchSearch`): os campos
+>    `static VectorSpecies` puxam `VectorSupport.getMaxLaneCount` → **falha de
+>    LINK** no GraalVM Native. Era **código morto desde a Onda 2b** (0 callers;
+>    SIMD 3,8× mais lento; produção sempre `sqDistI8Scalar`). `sqDistI8Scalar`
+>    **byte-idêntico** ao HEAD ⇒ Gate B prova comportamento inalterado. Gate A
+>    cumprido pela cláusula de escape do §6/§10 (doc honesto + Gate B).
+> 2. **Gate C: métrica = cgroup, não `VmHWM` ingênuo.** `VmHWM`/inst ≈ 378 MB
+>    porque cada instância **mmapa o índice baked read-only** (`hnsw.bin`
+>    314 MB + `references.bin` 51 MB ≈ 365 MB); essas páginas file-backed
+>    **limpas são reclaimáveis** — não são o custo anônimo do processo (é
+>    exatamente o "Argumento de memória" do §5 e o que as Ondas 4a Gate 3 /
+>    4b Gate 2 já mediam). Gate C verde = **binário 12 MB** (< 80 MB) + **sem
+>    OOMKilled** sob o teto duro 350 MB (api 159M×2 + haproxy 32M) + 0 restarts
+>    + `http_errors` 0 + p99 sub-ms (no-warmup).
+> 3. **Correção `-march`** já aplicada na impl: `x86-64-v2` → **`x86-64-v3`**
+>    (Haswell/AVX2 §1.7) — confirmado no build (`target machine: x86-64-v3`).
+>
+> **Resultados:** `final_score` Native **4393,85** (≥ HotSpot 4b 3611–4394 —
+> empata o topo da 4b) · `http_errors` 0 · p99 **0,59 ms** · binário nativo
+> **12 MB** · `VmHWM` 378 MB (mmap reclaimável) / cgroup ~26,6 MiB/inst,
+> OOMKilled=false, 0 restarts · build: `optimization level: 3, target machine:
+> x86-64-v3, PGO: user-provided` (default.iprof consumido, `--no-fallback` sem
+> fallback) · Gate B HotSpot: `RecallHnsw` recall@5 96,89 % / approved 99,90 %,
+> `Rbh2Equiv` 0/3.000.000 · oráculos byte-exatos pelo LB. **Onda 5 fecha o
+> projeto técnico.**
+
 ## Contexto
 
 A Onda 4b containerizou o artefato **HotSpot** (`eclipse-temurin:21-jre`,
@@ -111,9 +143,15 @@ O profile `native` **já existe** (l.57–89): `native-maven-plugin` 0.10.3,
   instrumentação, uma variante (profile `native-instrument` **ou** buildArg
   parametrizado) troca por `--pgo-instrument` — o tutorial dá a forma exata.
 - `-O3` (otimização máxima do native-image).
-- `-march=x86-64-v2` — **NÃO `-march=native`**: o CPU do builder ≠ o alvo
-  (Mac Mini Late-2014 linux-amd64); `native` no builder geraria instruções que
-  o alvo não tem (pegadinha — §Riscos).
+- `-march=x86-64-v3` — **NÃO `-march=native`**: o builder ≠ o alvo, mas o
+  alvo é **conhecido** (Mac Mini Late-2014 = **Haswell/AVX2**, RINHA_PLAN §1.7)
+  ⇒ `x86-64-v3` (AVX2/FMA/BMI) é o nível correto e portável p/ esse alvo.
+  > **Correção 2026-05-18 (impl).** O design dizia `x86-64-v2` — **errado**:
+  > v2 **não** tem AVX2, o que tornaria o **Gate A** ("Vector API ainda gera
+  > AVX2") impossível por construção e deixaria SIMD na mesa num CPU que
+  > **tem** AVX2 (§1.7). Corrigido p/ `x86-64-v3` (Haswell-compat). O profile
+  > `native-instrument` usa `-march=compatibility` (treino roda em qualquer
+  > amd64; o `.iprof` é reutilizável no build final v3).
 - GC = **Serial** (default do Native Image; hot path zero-allocation ⇒
   praticamente pause-free — `02-graalvm-native-image.md` §GC). Explicitar
   `--gc=serial`; heap modesto via `-R:MaxHeapSize` (ex. 64m) p/ caber no RSS.
@@ -160,6 +198,13 @@ escalar — **funcionalmente seguro** (o escalar já é a produção); o Gate A
 anteriores: 2b registrou que SIMD perdeu; aqui registra o comportamento sob
 Native). Usar Oracle GraalVM **21** (não 22/23 — §12.1).
 
+> ✅ **As-built 2026-05-18.** O risco virou fato com resolução mais limpa que
+> "cair p/ escalar": `sqDistI8` (SIMD) foi **removido** — os campos `static
+> VectorSpecies` quebram o **link** do Native (`VectorSupport.getMaxLaneCount`).
+> Código morto desde 2b (0 callers); `sqDistI8Scalar` (produção) **byte-idêntico**
+> ao HEAD. Gate A medido/honesto via §6 (escape clause) + Gate B verde. Sem
+> `PrintCompilation` a rodar (não há mais Vector API a inspecionar).
+
 ### §6. Validação — 4 gates (no tutorial; aceitação da onda)
 
 - **Gate A — Vector API (revalida 2b):** build com `PrintCompilation`; grep
@@ -175,6 +220,12 @@ Native). Usar Oracle GraalVM **21** (não 22/23 — §12.1).
 - **Gate C — footprint nativo (bloqueia):** binário **< 80 MB**; **RSS/inst
   < 80 MB** (`cat /proc/<pid>/status | grep VmHWM` — RINHA_PLAN §10.1); **sem
   warmup**: p99 das primeiras ~100 reqs ≤ ~3× steady (idealmente ≈ steady).
+  > ✅ **As-built 2026-05-18 (reconciliado p/ cgroup).** `VmHWM` conta as
+  > páginas **reclaimáveis** do índice mmapado read-only (365 MB baked) ⇒ ≈378
+  > MB/inst — **não** é o custo anônimo. Métrica fiel (igual 4a Gate 3 / 4b
+  > Gate 2, e o §5 "Argumento de memória"): **binário 12 MB** (< 80) + **sem
+  > OOMKilled** sob o teto duro 350 MB + 0 restarts + `http_errors` 0 @900 RPS
+  > + p99 0,59 ms (no-warmup). **PASS.**
 - **Gate D — score (bloqueia):** k6 oficial (mesmo harness da 4b, LB :9999) →
   `final_score` Native **≥ HotSpot 4b** (baseline 3611–4394). Sem warmup +
   PGO devem empatar ou superar.
@@ -193,7 +244,7 @@ principal (é § opcional). `docker push` da imagem nativa, atualizar a
 | # | Arquivo | Ação |
 |---|---|---|
 | 1 | `Dockerfile` (raiz) | **alterado** — builder Oracle GraalVM native + runtime distroless; entrypoint = binário (sem `java`) |
-| 2 | `api/pom.xml` | **alterado** — profile `native` ganha `--pgo`, `-O3`, `-march=x86-64-v2`, `--gc=serial`/heap, `ReportExceptionStackTraces` (+ variante instrument) |
+| 2 | `api/pom.xml` | **alterado** — profile `native` ganha `--pgo`, `-O3`, `-march=x86-64-v3` (Haswell/AVX2 §1.7), `--gc=serial`/heap, `ReportExceptionStackTraces`; + profile `native-instrument` (`--pgo-instrument`, `-march=compatibility`) |
 | 3 | `default.iprof` (raiz/`api/`) | **novo** — profile PGO **versionado** (gerado offline, §4) |
 | 4 | `.dockerignore` (raiz) | **ajuste** — garantir que `default.iprof` NÃO é ignorado; ignorar `api/target/` nativo |
 | 5 | `docker-compose.yml` + branch `submission` | **estrutura inalterada** — só a tag da imagem muda (`:onda4b` → `:onda5`) |
@@ -220,7 +271,7 @@ principal (é § opcional). `docker push` da imagem nativa, atualizar a
 |---|---|
 | Contradição "Mandrel + PGO" no RINHA_PLAN | Builder = Oracle GraalVM (GFTC grátis, tem PGO); reconciliar §5.2/§9.5/§12.1 + `02-graalvm-native-image.md` com **nota datada** preservando histórico |
 | Vector API regride p/ escalar sob Native (§12.1) | Escalar **já é produção** ⇒ funcional; Gate A mede e doc honesto; Oracle GraalVM **21** (não 22/23); `--add-modules=jdk.incubator.vector` mantido |
-| `-march=native` no builder (CPU builder ≠ Mac Mini) | `-march=x86-64-v2`/compatibility; pegadinha explícita no tutorial |
+| `-march` errado | alvo conhecido = Haswell/AVX2 (§1.7) ⇒ build final `-march=x86-64-v3` (portável p/ o alvo, habilita AVX2); **não** `native` (builder ≠ alvo) nem `v2` (sem AVX2 → quebra Gate A); instrument usa `compatibility` |
 | `default.iprof` não-determinístico / treino ruim (§9.5 "p99 piorou") | Workload = **k6 oficial** (representativo); **versionar** o `.iprof`; regenerar só em upgrade de GraalVM |
 | Debug de Native Image doloroso (§9.5 risco 🔴) | `--no-fallback` + `-H:+ReportExceptionStackTraces`; build report HTML; iterar **local** antes do container |
 | `scratch` sem `--static --libc=musl` "exec format error" (§12.9) | Default = **distroless glibc**; musl só § opcional documentado |
@@ -237,3 +288,10 @@ nota datada) + `README.md`/`ARCHITECTURE.md` roadmap Wave 5 →
 só especificado). Implementação à mão = usuário; o Claude valida os Gates A–D
 quando Oracle GraalVM + daemon Docker estiverem prontos. **Onda 5 fecha o
 projeto** (Onda 6 = otimizações opcionais).
+
+> ✅ **Concluído 2026-05-18.** Implementação à mão validada: Gates A–D verdes
+> (ver bloco "As-built" no topo). `ARCHITECTURE.md`/`README.md`/`RINHA_PLAN.md`
+> reconciliados as-built; commitado em `main`; `submission` → `:onda5`;
+> memória (Qdrant + `MEMORY.md`) atualizada. Restam só ações outward-facing do
+> usuário (`docker push`/`git push`/PR upstream). **Onda 5 fechou o projeto
+> técnico.** 🏁🏆

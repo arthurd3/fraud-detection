@@ -1,10 +1,11 @@
 package org.fraudDetection.knn;
 
-import jdk.incubator.vector.ByteVector;
-import jdk.incubator.vector.IntVector;
-import jdk.incubator.vector.VectorOperators;
-import jdk.incubator.vector.VectorSpecies;
-
+// Onda 5 (2026-05-18): o Vector API (jdk.incubator.vector) foi REMOVIDO daqui.
+// Era código morto desde a Onda 2b (SIMD medido 3,8x mais lento que o escalar
+// → produção sempre usou sqDistI8Scalar; sqDistI8 SIMD tinha 0 callers). Sob
+// GraalVM Native Image (Oracle 21.0.11) os campos static VectorSpecies puxavam
+// VectorSupport.getMaxLaneCount → falha de LINK (undefined reference). Remover
+// o dead code desbloqueia o build nativo sem mudar o comportamento de produção.
 public final class DistanceFunctions {
 
     private DistanceFunctions() {}
@@ -13,23 +14,6 @@ public final class DistanceFunctions {
         float s = 0f;
         for (int i = 0; i < 14; i++) { float d = a[i] - b[i]; s += d * d; }
         return s;
-    }
-
-    private static final VectorSpecies<Byte>    B64  = ByteVector.SPECIES_64;   // 8 lanes
-    private static final VectorSpecies<Integer> I256 = IntVector.SPECIES_256;   // 8 lanes
-
-
-    public static int sqDistI8(byte[] q, byte[] v) {
-        IntVector acc = IntVector.zero(I256);
-        for (int off = 0; off < 16; off += 8) {                 
-            ByteVector qb = ByteVector.fromArray(B64, q, off);
-            ByteVector vb = ByteVector.fromArray(B64, v, off);
-            IntVector qi = (IntVector) qb.convertShape(VectorOperators.B2I, I256, 0);
-            IntVector vi = (IntVector) vb.convertShape(VectorOperators.B2I, I256, 0);
-            IntVector d  = qi.sub(vi);
-            acc = acc.add(d.mul(d));
-        }
-        return acc.reduceLanes(VectorOperators.ADD);
     }
 
     public static int sqDistI8Scalar(byte[] q, byte[] v) {

@@ -6,3 +6,5 @@
 docs
 *.md
 .claude
+_pgo
+Dockerfile.instr
