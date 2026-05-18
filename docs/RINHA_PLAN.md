@@ -269,7 +269,16 @@ Cada decisão abaixo é **travada para a Onda 1** com formato uniforme: alternat
 
 **Pegadinhas**: hoje o `pom.xml` está em **Java 23** — corrigir na Onda 0 (ver §9.0).
 
-### 5.2 [DECISÃO] Runtime: GraalVM Native Image (Mandrel) + PGO
+### 5.2 [DECISÃO] Runtime: GraalVM Native Image (Oracle GraalVM, GFTC) + PGO
+
+> **Reconciliação 2026-05-18 (Onda 5).** A trava original dizia "Mandrel +
+> PGO" — **contraditória**: PGO (`--pgo`/`--pgo-instrument`) é **exclusivo do
+> Oracle GraalVM**; Mandrel / GraalVM CE **não** têm PGO. Resolução: builder =
+> **Oracle GraalVM 21** (`container-registry.oracle.com/graalvm/native-image:21`),
+> **grátis para produção** sob a licença **GFTC** desde GraalVM for JDK
+> 17.0.9/21 (set/2023) — "PGO obrigatório" honrado a custo zero. Histórico
+> "Mandrel" preservado abaixo. Ver
+> `docs/superpowers/specs/2026-05-18-onda5-native-design.md` §Decisão 1.
 
 **Conceito-chave**: `CONCEITOS.md` §7, §11 (PGO).
 
@@ -285,9 +294,9 @@ Cada decisão abaixo é **travada para a Onda 1** com formato uniforme: alternat
 
 **Quando você escolheria diferente**: se workload muda dinamicamente em runtime (não é o caso da Rinha), C2 do HotSpot otimiza continuamente.
 
-**Onde aparece**: `Dockerfile` (builder image `ghcr.io/graalvm/native-image-community:21`), `pom.xml` profile `native`, `--pgo-instrument` e `--pgo` flags.
+**Onde aparece**: `Dockerfile` (builder image `container-registry.oracle.com/graalvm/native-image:21` — Oracle GraalVM, GFTC; ver nota 2026-05-18 acima), `pom.xml` profile `native`, `--pgo-instrument` e `--pgo` flags.
 
-**Pegadinhas**: Vector API regrediu silenciosamente em Mandrel 22/23. Sempre validar com `-Dgraal.PrintCompilation=true` (ver §12.1).
+**Pegadinhas**: Vector API regrediu silenciosamente em GraalVM/Mandrel 22/23 — usar **Oracle GraalVM 21** (não 22/23). Sempre validar com `-Dgraal.PrintCompilation=true` (ver §12.1).
 
 ### 5.3 [DECISÃO] HTTP server: NIO Selector single-threaded raw
 
@@ -1030,7 +1039,7 @@ Cada onda é uma **mini-aula**. Pré-requisitos linkam para `CONCEITOS.md`. Risc
 - Onda 4 concluída.
 
 **Mapa**:
-1. Trocar builder do Dockerfile para `ghcr.io/graalvm/native-image-community:21` (Mandrel).
+1. Trocar builder do Dockerfile para `container-registry.oracle.com/graalvm/native-image:21` (**Oracle GraalVM 21**, GFTC grátis — tem PGO; ver §5.2 nota 2026-05-18).
 2. Criar `reflect-config.json` (provavelmente vazio — temos 0 reflection).
 3. Criar `resource-config.json` se algum recurso precisar embarcar (.bin ficam externos).
 4. Build inicial Native Image, rodar k6, capturar perf.
@@ -1151,7 +1160,7 @@ A cada onda significativa, salvar:
 **Mitigação**:
 - Sempre buildar com `-Dgraal.PrintCompilation=true | grep -i vector`.
 - Manter teste JMH que falha se distância isolada > X µs.
-- Usar Mandrel 21 LTS (não bleeding edge).
+- Usar **Oracle GraalVM 21** (não bleeding edge 22/23; Mandrel/CE não tem PGO — ver §5.2 nota 2026-05-18).
 
 ### 12.2 `com.sun.net.httpserver` não é descartável
 

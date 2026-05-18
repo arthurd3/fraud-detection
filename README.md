@@ -192,7 +192,7 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 | **3** | Hand‑rolled HNSW index — recall@5 96.89 %, p99 ≈ 0.145 ms (≈430× vs brute) | ✅ **Complete** |
 | **4a** | Fit in 350 MB — `hnsw.bin` RBH2 lossless (int24 + sparse upper) + offline prebuild + `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | ✅ **Complete** |
 | **4b** | Containerization (HotSpot) + HAProxy + official k6 + ≥2 instances + submission | ✅ **Complete** — live‑daemon validated; `docker push`/PR pending |
-| 5 | GraalVM Native Image + PGO | ⏳ Planned |
+| **5** | GraalVM Native Image + PGO (Oracle GraalVM, GFTC) | 📝 Spec + tutorial ready (hand‑impl pending) |
 
 The full roadmap, with the per‑stage performance reasoning, is in [`docs/RINHA_PLAN.md`](docs/RINHA_PLAN.md) (PT‑BR).
 
@@ -217,6 +217,7 @@ fraudDetection/                # main branch (code) — build context for the im
 │   ├── TUTORIAL_SERVER_NIO.md # build-it-yourself: the NIO server (PT-BR)
 │   ├── TUTORIAL_JSON_KNN.md   # build-it-yourself: JSON parser + k-NN (PT-BR)
 │   ├── TUTORIAL_CONTAINER.md  # build-it-yourself: Wave 4b containerization (PT-BR)
+│   ├── TUTORIAL_NATIVE.md     # build-it-yourself: Wave 5 GraalVM Native + PGO (PT-BR)
 │   └── tecnologias/           # 14 technology reference notes (PT-BR)
 └── api/                       # the Maven project
     ├── pom.xml                # zero dependencies; native profile for GraalVM

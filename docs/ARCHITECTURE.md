@@ -246,7 +246,7 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 - **Wave 3** — HNSW turned the O(n) scan into a graph walk visiting ~hundreds of vectors. **This is the latency lever.**
 - **Wave 4a** — *done*: `hnsw.bin` RBH2 (int24 + sparse upper, lossless ≈300 MB), `api.jar` 41 KB (no bundled dataset), `DATA_PATH`, offline `tools.Prebuild`; **proven** 2 instances + shared reclaimable mmap peak **147 MiB** under a 350 MiB cgroup (`systemd-run` faithful proxy).
 - **Wave 4b** — *done*: multi‑stage HotSpot image (`eclipse-temurin:21-jdk` builder → `21-jre` runtime) with the RBH2 binaries **baked** (build context 365 MB — the 459 MB RBH1 golden is `.dockerignore`d), HAProxy `mode tcp` + 2 instances in `docker compose` summing to exactly **1.0 CPU / 350 MB** (haproxy 0.15/32M + api‑1/api‑2 0.425/159M each). Validated on a live Docker daemon: real peak **103 MiB / 350**, `OOMKilled=false`, official k6 `final_score` **3611–4394** (HotSpot, within the 3000–4500 budget). Public baked image + orphan `submission` branch (3 files, no code); `docker push` and the upstream PR are the author's outward‑facing steps.
-- **Wave 5** — GraalVM Native Image + PGO removes JIT warm‑up and trims constant factors; **must re‑validate** Wave‑2b Gate A and the Wave‑3/4a/4b gates (silent Vector‑API→scalar regression risk).
+- **Wave 5** — *spec + tutorial ready (hand‑impl pending)*: GraalVM Native Image + PGO (builder = **Oracle GraalVM 21, GFTC free** — the locked "Mandrel + PGO" was contradictory: CE/Mandrel has no PGO) removes JIT warm‑up and trims constant factors; **must re‑validate** Wave‑2b Gate A and the Wave‑3/4a/4b gates (silent Vector‑API→scalar regression risk). Spec: `docs/superpowers/specs/2026-05-18-onda5-native-design.md`; tutorial: `docs/TUTORIAL_NATIVE.md`.
 
 ## 7. Key design decisions & trade‑offs
 
@@ -275,7 +275,7 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 | Brute‑force O(n) k‑NN latency | **done** — HNSW graph walk, p99 ≈ 0.145 ms (≈430× vs brute) | 3 |
 | 350 MB budget — jar bundled the `.gz`; `hnsw.bin` ≈460 MB > 350 MB alone | **done (4a)** — RBH2 lossless ≈300 MB, jar 41 KB, offline prebuild, `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | 4a |
 | Containerization / HAProxy / 2 instances / official k6 / `submission` | **done (4b)** — baked public image, HAProxy `mode tcp`, `docker compose` 1.0 CPU/350 MB; live‑daemon validated: peak 103 MiB, no OOM, k6 `final_score` 3611–4394; `submission` branch built (`docker push`/PR remain author steps) | 4b |
-| JIT warm‑up, no PGO | open | 5 (GraalVM Native Image + PGO; re‑validate Gate A + Wave‑3/4a/4b gates) |
+| JIT warm‑up, no PGO | **spec + tutorial ready (hand‑impl pending)** | 5 (GraalVM Native Image + PGO — Oracle GraalVM GFTC; re‑validate Gate A + Wave‑3/4a/4b gates) |
 | No chunked encoding / pipelining / 4 KB request cap | out of scope by design (the Rinha payload is small and fixed) | — |
 | Readiness implied by a successful bind | acceptable (dataset+graph mapped before bind); proper gating | 4 |
 

@@ -1,8 +1,16 @@
 # GraalVM Native Image
 
 **Categoria**: Runtime + AOT compiler
-**Versão usada na Rinha**: Mandrel 21 LTS (fork Red Hat) ou GraalVM CE 21
+**Versão usada na Rinha**: **Oracle GraalVM 21** (GFTC, grátis para produção)
 **Decisão rápida**: ver `../RINHA_PLAN.md` §5.2
+
+> **Reconciliação 2026-05-18 (Onda 5).** Este doc dizia "Mandrel 21 LTS /
+> GraalVM CE 21". Como **PGO é obrigatório** (§5.2) e Mandrel / GraalVM CE
+> **não** têm PGO, o builder real é **Oracle GraalVM 21**
+> (`container-registry.oracle.com/graalvm/native-image:21`), grátis sob GFTC
+> desde set/2023. Menções a "Mandrel" abaixo são contexto conceitual (Mandrel
+> é um builder Native Image válido — só não tem PGO). Ver
+> `../superpowers/specs/2026-05-18-onda5-native-design.md`.
 
 ---
 
@@ -33,7 +41,7 @@ AOT compila tudo no momento do build → binário pronto pra rodar no pico desde
 3. **Startup em ms** — irrelevante para a Rinha (testa app rodando), mas bom para health check.
 4. **Footprint determinístico** — sem GC concurrent surpresa.
 
-Local: `Dockerfile` muda builder image para `ghcr.io/graalvm/native-image-community:21` ou `quay.io/quarkus/ubi-quarkus-mandrel-builder-image:jdk-21`.
+Local: `Dockerfile` muda builder image para `container-registry.oracle.com/graalvm/native-image:21` (Oracle GraalVM, GFTC — tem PGO; ver nota 2026-05-18 no topo).
 
 ## Como funciona (em profundidade)
 
@@ -147,4 +155,4 @@ Na Rinha, **GraalVM Native (Mandrel)** é o melhor encaixe: zero-warmup + RSS pe
 
 ## Veredito final na Rinha
 
-Onda 5 troca HotSpot por Mandrel 21 LTS. Validar Vector API gerou intrínsecos AVX2 (não regrediu). PGO obrigatório para fechar gap de C2.
+Onda 5 troca HotSpot por **Oracle GraalVM 21** (GFTC; tem PGO — ver nota 2026-05-18 no topo). Validar Vector API gerou intrínsecos AVX2 (não regrediu). PGO obrigatório para fechar gap de C2.
