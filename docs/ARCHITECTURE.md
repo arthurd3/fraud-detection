@@ -1,6 +1,6 @@
 # Architecture — Fraud Detection API
 
-> Engineering reference for the **as‑built** system, current at the close of **Wave 3 (HNSW)**. This document describes what the code *does today*, why it is shaped this way, and where the deliberate simplifications are. The forward‑looking plan lives in [`RINHA_PLAN.md`](RINHA_PLAN.md) (PT‑BR); this document is the canonical description of the current implementation. When a wave changes the implementation, update the affected component sections and the §1 naming table in the same change.
+> Engineering reference for the **as‑built** system, current at the close of **Wave 4a** (fit‑in‑350 MB / RBH2). This document describes what the code *does today*, why it is shaped this way, and where the deliberate simplifications are. The forward‑looking plan lives in [`RINHA_PLAN.md`](RINHA_PLAN.md) (PT‑BR); this document is the canonical description of the current implementation. When a wave changes the implementation, update the affected component sections and the §1 naming table in the same change.
 
 ## Contents
 
@@ -188,13 +188,13 @@ For each unit: **responsibility**, **interface**, **rationale**.
 - **Responsibility:** build the navigable graph from the RB2 dataset and serialize it to `hnsw.bin`.
 - **Interface:** `static void build(String binPath)`; `static int effectiveN()`.
 - **As‑built:** Malkov‑Yashunin insertion. Layer‑0 adjacency is a dense `int[count·M0]` + `int[] deg0`; upper layers are sparse (`HashMap<Integer,int[]>`, block per layer). Level RNG is a fixed‑seed xorshift64 (`0x9E3779B97F4A7C15`) ⇒ **reproducible graph**. Neighbor selection uses the **Malkov‑Yashunin Algorithm 4 heuristic with `keepPrunedConnections` backfill** (`selectHeuristic`) — it keeps a candidate only if it is closer to the base than to any already‑selected neighbor, preserving long‑range edges and graph navigability (this replaced the originally‑specified "closest‑M simple" and is what gives recall@5 96.89 % at the default `ef_search=50`). Parameters are locked: `M=16`, `M0=32`, `ef_construction=200`, `mL=1/ln M`. `degOf` carries the guard `if (lc > level[node]) return 0;` — the flatten step iterates *every node × every layer*, and without the guard a node with `1 ≤ level < lc` (its `up` block is only `level·M` long) throws `ArrayIndexOutOfBounds`. `-Dhnsw.maxNodes=K` caps `effectiveN()` for cheap smoke builds (default = full count; zero production impact). Build is build‑time only — JDK collections are fair game; it is **not** the hot path.
-- **Cost:** O(N·efC·log N) ⇒ minutes and a large heap on the **first boot only** (`-Xmx2g`). Steady state mmaps and runs in `-Xmx256m`. Pre‑building offline is a Wave 4 concern.
+- **Cost:** O(N·efC·log N) ⇒ minutes and a large heap on the **first boot only** (`-Xmx2g`). Steady state mmaps and runs in `-Xmx256m`. Offline pre‑building is **delivered in Wave 4a** (`tools.Prebuild` writes the binaries from the `.gz` on the dev box; the container only mmaps — it never builds).
 
 ### `knn.HnswGraph` (56 LOC) — Wave 3
 
 - **Responsibility:** read‑only `MappedByteBuffer` view of `hnsw.bin`.
 - **Interface:** `isValid(File, expectCount)`, `mmap(File)`, then `level(node)`, `nbrLo/nbrHi(node,k)`, `nbrAt(k,idx)`.
-- **`hnsw.bin` format** (big‑endian, like RB2): a 28‑byte header `magic 'R','B','H','1' | int32 count | int32 M | int32 M0 | int32 efC | int32 entryPoint | int32 maxLevel`, then `count` `uint8` levels, then per layer `k = 0..maxLevel` a **flat CSR**: `int32 offk[count+1]` followed by `int32 nbrk[offk[count]]`. The CSR is *uniform* `count+1` per layer (a node absent at layer `k` has `offk[i+1]==offk[i]`), so the reader needs no bookkeeping. Size is dominated by L0 (≈460 MB for 3M nodes) — int24/sparse‑upper compaction and the 350 MB budget are Wave 4. Gitignored/regenerable.
+- **`hnsw.bin` format** (big‑endian, like RB2): a 28‑byte header `magic 'R','B','H','2' | int32 count | int32 M | int32 M0 | int32 efC | int32 entryPoint | int32 maxLevel`, then `count` `uint8` levels, then **L0 dense** (`int32 off0[count+1]` + **`int24 nbr0[]`**) and, per upper layer `k = 1..maxLevel`, a **sparse** block (`int32 Pk` + sorted `int24 node_k[Pk]` + `int32 off_k[Pk+1]` + `int24 nbr_k[]`). Neighbour ids are 3 bytes (< 2²⁴); upper‑layer lookup is a binary search on `node_k` (memoised, single‑thread). **Wave 4a** shrank this **losslessly** from ≈460 MB (RBH1, uniform `int32` CSR) to **≈300 MB** — `Rbh2Equiv` proved identical neighbour sets across all 3M nodes, and recall@5/approved are unchanged. Gitignored/regenerable; built offline by `tools.Prebuild`.
 
 ### `knn.HnswIndex` (≈120 LOC) — Wave 3 (rewritten)
 
@@ -244,7 +244,8 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 - **Wave 1** — correctness baseline (full O(3M) `float` scan).
 - **Wave 2a/2b** — `int8` quantization + off‑heap mmap shrank each vector ~4×; SIMD was explored and **rejected for the hot path** (3.8× slower here — see §7).
 - **Wave 3** — HNSW turned the O(n) scan into a graph walk visiting ~hundreds of vectors. **This is the latency lever.**
-- **Wave 4** — containerization, HAProxy, 2 instances, the 350 MB memory budget (jar must not bundle the `.gz`; `hnsw.bin` int24/compaction; shared mmap), official k6 baseline.
+- **Wave 4a** — *done*: `hnsw.bin` RBH2 (int24 + sparse upper, lossless ≈300 MB), `api.jar` 41 KB (no bundled dataset), `DATA_PATH`, offline `tools.Prebuild`; **proven** 2 instances + shared reclaimable mmap peak **147 MiB** under a 350 MiB cgroup (`systemd-run` faithful proxy).
+- **Wave 4b** — containerization (multi‑stage HotSpot image, RBH2 binaries baked), HAProxy `mode tcp` + 2 instances in `docker compose` (≤1 CPU / 350 MB), official k6 `final_score`, public image + `submission` branch (spec + tutorial ready; hand‑impl pending).
 - **Wave 5** — GraalVM Native Image + PGO removes JIT warm‑up and trims constant factors; **must re‑validate** Wave‑2b Gate A and the Wave‑3 gates (silent Vector‑API→scalar regression risk).
 
 ## 7. Key design decisions & trade‑offs
@@ -259,7 +260,7 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 | `int8` global‑symmetric quantization (Wave 2a) | ~4× smaller, cache‑friendly, integer distance, off‑heap mmap | Tiny quantization error; sanity gate is now *approximate* vs the `float` baseline (≥99 %, not exact) |
 | **Scalar distance, SIMD rejected for the hot path** (Wave 2b) | The Vector API impl is bit‑identical but ≈3.8× slower for this tiny fixed shape on HotSpot/AVX2; build does billions of distances | `sqDistI8` kept only as a correctness reference; revisit under Native Image (Wave 5) |
 | **HNSW with the Alg.4 heuristic** (Wave 3) | The O(3M) scan was the latency wall; the heuristic preserves navigability ⇒ recall@5 96.89 % at the default `ef=50` | HNSW is *approximate* — guarded by Gate 3a (recall ≥95 %) and Gate 3b (approved‑agreement ≥99 %) vs the retained brute oracle |
-| Self‑bootstrapping mmap files (RB2, `hnsw.bin`) | First boot derives the binaries; later boots map instantly; binaries gitignored/regenerable | First boot is minutes + `-Xmx2g`; offline pre‑build is a Wave 4 concern |
+| Self‑bootstrapping mmap files (RB2, `hnsw.bin`) | First boot derives the binaries; later boots map instantly; binaries gitignored/regenerable | First boot is minutes + `-Xmx2g`; offline pre‑build **delivered in Wave 4a** (`tools.Prebuild`) |
 | Fixed‑seed level RNG | Reproducible graph ⇒ reproducible gates | The graph is one deterministic sample of the HNSW distribution |
 | **Fail‑open on unparseable body** (`fraudCount = 0` ⇒ `approved:true`) | The score penalizes an HTTP error (weight 5) more than a missed fraud (weight 3) | A malformed payload is silently approved (a scoring‑driven choice, not a security stance) |
 | Schema‑specific JSON walker / hard‑coded tables / integer date math | Avoids object graph, key collisions, file I/O and `java.time` on the hot path | Brittle to schema/spec changes; hand‑verified algorithms |
@@ -272,8 +273,9 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 | `float[][]` heap residency (needed `-Xmx768m`) | **done** — `int8` RB2 off‑heap mmap, runs in `-Xmx256m` | 2a |
 | Scalar distance leaving SIMD idle | **evaluated & closed** — SIMD measured slower here; scalar kept (see §7) | 2b |
 | Brute‑force O(n) k‑NN latency | **done** — HNSW graph walk, p99 ≈ 0.145 ms (≈430× vs brute) | 3 |
-| Containerization / HAProxy / 2 instances / 350 MB budget / official k6 | open — jar still bundles the `.gz`; `hnsw.bin` ≈460 MB needs compaction | 4 |
-| JIT warm‑up, no PGO | open | 5 (GraalVM Native Image + PGO; re‑validate Gate A + Wave‑3 gates) |
+| 350 MB budget — jar bundled the `.gz`; `hnsw.bin` ≈460 MB > 350 MB alone | **done (4a)** — RBH2 lossless ≈300 MB, jar 41 KB, offline prebuild, `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | 4a |
+| Containerization / HAProxy / 2 instances / official k6 / `submission` | spec + tutorial ready; hand‑impl + validation pending (needs Docker daemon) | 4b |
+| JIT warm‑up, no PGO | open | 5 (GraalVM Native Image + PGO; re‑validate Gate A + Wave‑3/4a/4b gates) |
 | No chunked encoding / pipelining / 4 KB request cap | out of scope by design (the Rinha payload is small and fixed) | — |
 | Readiness implied by a successful bind | acceptable (dataset+graph mapped before bind); proper gating | 4 |
 
@@ -327,4 +329,4 @@ The build tutorials ([`TUTORIAL_JSON_KNN.md`](TUTORIAL_JSON_KNN.md), [`TUTORIAL_
 
 ---
 
-*This document describes the system as built at the close of Wave 3 (HNSW). When a wave changes the implementation, update the affected component sections, the §1 naming table, and §8/§9 in the same change.*
+*This document describes the system as built at the close of Wave 4a (fit‑in‑350 MB / RBH2). When a wave changes the implementation, update the affected component sections, the §1 naming table, and §8/§9 in the same change.*

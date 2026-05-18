@@ -5,9 +5,9 @@
 ![Java](https://img.shields.io/badge/Java-21%20LTS-007396)
 ![Build](https://img.shields.io/badge/build-Maven%20(wrapper)-C71A36)
 ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-success)
-![Status](https://img.shields.io/badge/Waves%201--3-complete%20%E2%9C%94-success)
+![Status](https://img.shields.io/badge/Waves%201--4a-complete%20%E2%9C%94-success)
 
-**Status:** Waves 1–3 complete — `int8` off‑heap mmap dataset + a hand‑rolled **HNSW** index. `POST /fraud-score` validated end‑to‑end against both official oracles; recall@5 96.89 % / approved‑agreement 99.90 % vs the brute oracle; HNSW p99 ≈ 0.145 ms (≈430× vs the brute scan). Waves 4–5 (containerization/350 MB budget, GraalVM native) are on the roadmap below.
+**Status:** Waves 1–4a complete — `int8` off‑heap mmap dataset + a hand‑rolled **HNSW** index + **RBH2** lossless compaction. `POST /fraud-score` validated end‑to‑end against both official oracles; recall@5 96.89 % / approved‑agreement 99.90 %; HNSW p99 ≈ 0.145 ms (≈430× vs brute). Wave 4a proved the **350 MB budget** — 2 instances + shared reclaimable mmap peaked **147 MiB** under a 350 MiB cgroup. Wave 4b (containerize + HAProxy + official k6 + submission) has its spec + tutorial ready (hand‑impl pending); Wave 5 (GraalVM native) is on the roadmap below.
 
 ---
 
@@ -162,7 +162,8 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 | **2a** | int8 quantization + memory‑mapped off‑heap binary dataset | ✅ **Complete** |
 | **2b** | Vector API (SIMD) distance — *evaluated; 3.8× slower for this shape, scalar kept* | ✅ **Complete** |
 | **3** | Hand‑rolled HNSW index — recall@5 96.89 %, p99 ≈ 0.145 ms (≈430× vs brute) | ✅ **Complete** |
-| 4 | Containerization (HotSpot) + 350 MB budget + official k6 + ≥2 instances behind HAProxy | ⏳ Planned |
+| **4a** | Fit in 350 MB — `hnsw.bin` RBH2 lossless (int24 + sparse upper) + offline prebuild + `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | ✅ **Complete** |
+| 4b | Containerization (HotSpot) + HAProxy + official k6 + ≥2 instances + submission | 📝 Spec + tutorial ready (hand‑impl pending) |
 | 5 | GraalVM Native Image + PGO | ⏳ Planned |
 
 The full roadmap, with the per‑stage performance reasoning, is in [`docs/RINHA_PLAN.md`](docs/RINHA_PLAN.md) (PT‑BR).

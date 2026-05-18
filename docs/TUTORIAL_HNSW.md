@@ -853,10 +853,11 @@ java -Xmx256m --add-modules jdk.incubator.vector \
   `DATA_PATH`, mmap compartilhado/reclaimável; gate `docker run --memory=350m`.
   Spec: `docs/superpowers/specs/2026-05-17-onda4a-fit-350mb-design.md`.
 - **Onda 4b — conteinerização + HAProxy + k6 + submission**
-  (`TUTORIAL_CONTAINER.md`, a criar): Dockerfile multi-stage (HotSpot,
-  slim/distroless), `docker-compose.yml` (HAProxy `mode tcp` + 2 instâncias +
-  `deploy.resources.limits` ≤350 MB/1 CPU), k6 oficial, branch `submission` +
-  `info.json` + PR em `participants/`. Consome os binários RBH2 da 4a.
+  (`TUTORIAL_CONTAINER.md`, ✅ **criado** — 2026-05-17): imagem pública baked +
+  `Dockerfile` multi-stage + `docker/haproxy.cfg` `mode tcp` +
+  `docker-compose.yml` (2 instâncias, 1.0 CPU/350 M) + branch `submission` +
+  `info.json` + PR `participants/`; 4 gates. Spec:
+  `docs/superpowers/specs/2026-05-17-onda4b-container-design.md`.
 - **Onda 5 — GraalVM Native Image + PGO**: **revalidar Gate 3 + Gate A da 2b** (regressão
   silenciosa do Vector API → escalar em Native Image; `-Dgraal.PrintCompilation`).
 

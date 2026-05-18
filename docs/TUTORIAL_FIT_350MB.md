@@ -650,12 +650,15 @@ se o p99 disparar, é sinal de thrashing de page-cache → revisar compactação
 (p99 medido) verdes.
 
 - **Onda 4b — conteinerização + HAProxy + k6 + submission**
-  (`TUTORIAL_CONTAINER.md`, a criar): Dockerfile multi-stage (HotSpot,
-  slim/distroless), `docker-compose.yml` com **HAProxy `mode tcp` + 2
-  instâncias** e `deploy.resources.limits` somando ≤ 350 MB / 1 CPU, k6 oficial
-  (`run.sh`/`test/test.js`, ramp 1→900 RPS/120 s), captura do `final_score`,
-  branch `submission` + `info.json` + PR em `participants/arthurd3.json`.
-  **Consome** os binários RBH2 desta etapa (baked na imagem ou volume).
+  (`TUTORIAL_CONTAINER.md`, ✅ **criado** — 2026-05-17): imagem pública
+  pré-buildada com os binários RBH2 baked; `Dockerfile` multi-stage
+  (temurin jdk→jre); `docker/haproxy.cfg` **`mode tcp`/`nbthread 1`**;
+  `docker-compose.yml` (HAProxy + 2 instâncias, `deploy.resources.limits`
+  1.0 CPU / 350 M); branch `submission` orphan + `info.json` + PR
+  `participants/arthurd3.json`; k6 oficial → `final_score`. 4 gates: stack
+  e2e pelo LB, `docker stats` < 350 MB sem OOMKilled, k6 oficial, clone
+  `--branch submission` fiel ao CI. Spec:
+  `docs/superpowers/specs/2026-05-17-onda4b-container-design.md`.
 - **Onda 5 — GraalVM Native Image + PGO**: revalidar Gate A da 2b + os gates da
   3/4a (regressão silenciosa Vector API → escalar; `-Dgraal.PrintCompilation`).
 
