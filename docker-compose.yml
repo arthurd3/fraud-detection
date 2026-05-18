@@ -1,0 +1,28 @@
+name: rinha-fraud
+services:
+  haproxy:
+    image: haproxy:3.0-alpine
+    volumes:
+      - ./docker/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "9999:9999"
+    depends_on: [api-1, api-2]
+    networks: [app]
+    deploy:
+      resources:
+        limits: { cpus: "0.15", memory: "32M" }
+  api-1:
+    image: docker.io/arthurd3/rinha-fraud:onda4b
+    networks: [app]
+    deploy:
+      resources:
+        limits: { cpus: "0.425", memory: "159M" }
+  api-2:
+    image: docker.io/arthurd3/rinha-fraud:onda4b
+    networks: [app]
+    deploy:
+      resources:
+        limits: { cpus: "0.425", memory: "159M" }
+networks:
+  app:
+    driver: bridge

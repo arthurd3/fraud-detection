@@ -5,9 +5,9 @@
 ![Java](https://img.shields.io/badge/Java-21%20LTS-007396)
 ![Build](https://img.shields.io/badge/build-Maven%20(wrapper)-C71A36)
 ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-success)
-![Status](https://img.shields.io/badge/Waves%201--4a-complete%20%E2%9C%94-success)
+![Status](https://img.shields.io/badge/Waves%201--4b-complete%20%E2%9C%94-success)
 
-**Status:** Waves 1–4a complete — `int8` off‑heap mmap dataset + a hand‑rolled **HNSW** index + **RBH2** lossless compaction. `POST /fraud-score` validated end‑to‑end against both official oracles; recall@5 96.89 % / approved‑agreement 99.90 %; HNSW p99 ≈ 0.145 ms (≈430× vs brute). Wave 4a proved the **350 MB budget** — 2 instances + shared reclaimable mmap peaked **147 MiB** under a 350 MiB cgroup. Wave 4b (containerize + HAProxy + official k6 + submission) has its spec + tutorial ready (hand‑impl pending); Wave 5 (GraalVM native) is on the roadmap below.
+**Status:** Waves 1–4b complete — `int8` off‑heap mmap dataset + a hand‑rolled **HNSW** index + **RBH2** lossless compaction, **containerized**. `POST /fraud-score` validated end‑to‑end against both official oracles; recall@5 96.89 % / approved‑agreement 99.90 %; HNSW p99 ≈ 0.145 ms (≈430× vs brute). Wave 4a proved the **350 MB budget** (147 MiB / 2 inst. under a `systemd-run` cgroup proxy); **Wave 4b containerized it** — a public baked image + HAProxy `mode tcp` + 2 instances in `docker compose` (exactly **1.0 CPU / 350 MB**), validated on a live Docker daemon: real peak **103 MiB**, `OOMKilled=false`, official k6 `final_score` **3611–4394** (HotSpot). The `docker push` + upstream PR are the author's outward‑facing steps. Wave 5 (GraalVM native) is on the roadmap below.
 
 ---
 
@@ -139,6 +139,23 @@ curl -s -X POST http://localhost:9999/fraud-score \
 # => {"approved":true,"fraud_score":0.0}
 ```
 
+### Run with Docker (Wave 4b)
+
+The Rinha harness runs the solution as a public image behind a round‑robin load balancer. The same stack runs locally — `Dockerfile` and `.dockerignore` are at the repo root, and the RBH2 binaries (Wave 4a) are **baked into the image**:
+
+```bash
+# from fraudDetection/ (build context = repo root)
+docker build -t docker.io/<user>/rinha-fraud:onda4b .
+docker compose up -d                 # haproxy + api-1 + api-2 — exactly 1.0 CPU / 350 MB
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9999/ready   # => 200
+curl -s -X POST http://localhost:9999/fraud-score -H 'Content-Type: application/json' \
+  -d '{"id":"tx-1329056812","transaction":{"amount":41.12,"installments":2,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":82.24,"tx_count_24h":3,"known_merchants":["MERC-003","MERC-016"]},"merchant":{"id":"MERC-016","mcc":"5411","avg_amount":60.25},"terminal":{"is_online":false,"card_present":true,"km_from_home":29.23},"last_transaction":null}'
+# => {"approved":true,"fraud_score":0.0}
+docker compose down
+```
+
+`docker compose up` only **uses the baked image** — it never builds and never regenerates the binaries (Wave 4a `tools.Prebuild` did that offline). For the official score: `cd ../rinha-de-backend-2026 && ./run.sh`. Full containerization walkthrough in [docs/TUTORIAL_CONTAINER.md](docs/TUTORIAL_CONTAINER.md).
+
 ## Verified results
 
 Validated at the close of Wave 3 on a real server with the full 3M dataset at `-Xmx256m` — the five gates (see [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology)):
@@ -154,6 +171,17 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 
 > **Latency:** the HNSW search is already **sub‑millisecond on HotSpot** (p99 ≈ 0.145 ms), so the *search* line of the p99 < 1 ms target is met before Native Image. Waves 4–5 harden the rest of the envelope (containerization + 350 MB budget; native image + PGO). See the performance budget in [ARCHITECTURE.md](docs/ARCHITECTURE.md#6-performance-budget).
 
+**Wave 4b — containerized stack** (live Docker daemon; HAProxy `mode tcp` + 2 instances in `docker compose`, 1.0 CPU / 350 MB):
+
+| Gate | Check | Result |
+| --- | --- | --- |
+| 1 | `docker compose up` + both oracles **through the HAProxy LB** `:9999` | ✅ 3/3 running, `/ready` 200, oracles byte‑exact, `hnsw pronto` |
+| 2 | `docker stats` under k6 load — Σ MEM < 350 MiB, no `OOMKilled` | ✅ peak **103 MiB** (api 44.6 / 43.5, haproxy 14.8), `OOMKilled=false` ×3 |
+| 3 | official k6 `test/test.js` (ramp 1→900 RPS / 120 s) → `final_score` | ✅ **3611 / 4394** (2 runs), `http_errors:0`, `failure_rate:0.3 %` |
+| 4 | clone `--branch submission` → `docker compose up` (image‑only, no build) | ✅ local `file://` simulation green (`docker push`/PR remain author steps) |
+
+> Wave 4b adds **no Java** — it packages and runs the Wave‑4a artifact exactly as the Rinha harness does. Full gate detail in [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology).
+
 ## Project status & roadmap
 
 | Wave | Goal | Status |
@@ -163,7 +191,7 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 | **2b** | Vector API (SIMD) distance — *evaluated; 3.8× slower for this shape, scalar kept* | ✅ **Complete** |
 | **3** | Hand‑rolled HNSW index — recall@5 96.89 %, p99 ≈ 0.145 ms (≈430× vs brute) | ✅ **Complete** |
 | **4a** | Fit in 350 MB — `hnsw.bin` RBH2 lossless (int24 + sparse upper) + offline prebuild + `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | ✅ **Complete** |
-| 4b | Containerization (HotSpot) + HAProxy + official k6 + ≥2 instances + submission | 📝 Spec + tutorial ready (hand‑impl pending) |
+| **4b** | Containerization (HotSpot) + HAProxy + official k6 + ≥2 instances + submission | ✅ **Complete** — live‑daemon validated; `docker push`/PR pending |
 | 5 | GraalVM Native Image + PGO | ⏳ Planned |
 
 The full roadmap, with the per‑stage performance reasoning, is in [`docs/RINHA_PLAN.md`](docs/RINHA_PLAN.md) (PT‑BR).
@@ -171,10 +199,16 @@ The full roadmap, with the per‑stage performance reasoning, is in [`docs/RINHA
 ## Repository layout
 
 ```
-fraudDetection/
+fraudDetection/                # main branch (code) — build context for the image
 ├── README.md                  # you are here
 ├── COMECE_AQUI.md             # hands-on getting-started guide (PT-BR)
 ├── INSTALACAO.md              # toolchain installation (PT-BR)
+├── Dockerfile                 # Wave 4b — multi-stage build, RBH2 binaries baked
+├── .dockerignore              # Wave 4b — excludes the 459 MB RBH1 golden, .git, target, *.gz
+├── docker-compose.yml         # Wave 4b — haproxy + api-1 + api-2 (1.0 CPU / 350 MB)
+├── info.json                  # Wave 4b — submission metadata
+├── docker/
+│   └── haproxy.cfg            # Wave 4b — mode tcp, roundrobin, nbthread 1
 ├── docs/
 │   ├── ARCHITECTURE.md        # engineering deep-dive of the as-built system (EN)
 │   ├── RINHA_PLAN.md          # 5-wave implementation plan (PT-BR)
@@ -182,6 +216,7 @@ fraudDetection/
 │   ├── IMPACTO.md             # design-impact analysis (PT-BR)
 │   ├── TUTORIAL_SERVER_NIO.md # build-it-yourself: the NIO server (PT-BR)
 │   ├── TUTORIAL_JSON_KNN.md   # build-it-yourself: JSON parser + k-NN (PT-BR)
+│   ├── TUTORIAL_CONTAINER.md  # build-it-yourself: Wave 4b containerization (PT-BR)
 │   └── tecnologias/           # 14 technology reference notes (PT-BR)
 └── api/                       # the Maven project
     ├── pom.xml                # zero dependencies; native profile for GraalVM
@@ -197,6 +232,8 @@ fraudDetection/
             ├── example-references.json   # 100-entry sanity dataset (versioned)
             └── references.json.gz        # full 3M dataset (NOT versioned)
 ```
+
+The **`submission`** branch (Wave 4b) is a separate **orphan** branch with exactly three files — `docker-compose.yml`, `docker/haproxy.cfg`, `info.json` — referencing the public image. It carries **no code, no binaries, no `Dockerfile`**: the Rinha CI clones it shallow and only `docker compose up` (image pull, no build).
 
 ## Documentation
 

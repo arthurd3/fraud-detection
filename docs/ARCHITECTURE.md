@@ -1,6 +1,6 @@
 # Architecture — Fraud Detection API
 
-> Engineering reference for the **as‑built** system, current at the close of **Wave 4a** (fit‑in‑350 MB / RBH2). This document describes what the code *does today*, why it is shaped this way, and where the deliberate simplifications are. The forward‑looking plan lives in [`RINHA_PLAN.md`](RINHA_PLAN.md) (PT‑BR); this document is the canonical description of the current implementation. When a wave changes the implementation, update the affected component sections and the §1 naming table in the same change.
+> Engineering reference for the **as‑built** system, current at the close of **Wave 4b** (containerized — public baked image + HAProxy `mode tcp` + 2 instances in `docker compose`, 1.0 CPU / 350 MB). This document describes what the code *does today*, why it is shaped this way, and where the deliberate simplifications are. The forward‑looking plan lives in [`RINHA_PLAN.md`](RINHA_PLAN.md) (PT‑BR); this document is the canonical description of the current implementation. When a wave changes the implementation, update the affected component sections and the §1 naming table in the same change.
 
 ## Contents
 
@@ -245,8 +245,8 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 - **Wave 2a/2b** — `int8` quantization + off‑heap mmap shrank each vector ~4×; SIMD was explored and **rejected for the hot path** (3.8× slower here — see §7).
 - **Wave 3** — HNSW turned the O(n) scan into a graph walk visiting ~hundreds of vectors. **This is the latency lever.**
 - **Wave 4a** — *done*: `hnsw.bin` RBH2 (int24 + sparse upper, lossless ≈300 MB), `api.jar` 41 KB (no bundled dataset), `DATA_PATH`, offline `tools.Prebuild`; **proven** 2 instances + shared reclaimable mmap peak **147 MiB** under a 350 MiB cgroup (`systemd-run` faithful proxy).
-- **Wave 4b** — containerization (multi‑stage HotSpot image, RBH2 binaries baked), HAProxy `mode tcp` + 2 instances in `docker compose` (≤1 CPU / 350 MB), official k6 `final_score`, public image + `submission` branch (spec + tutorial ready; hand‑impl pending).
-- **Wave 5** — GraalVM Native Image + PGO removes JIT warm‑up and trims constant factors; **must re‑validate** Wave‑2b Gate A and the Wave‑3 gates (silent Vector‑API→scalar regression risk).
+- **Wave 4b** — *done*: multi‑stage HotSpot image (`eclipse-temurin:21-jdk` builder → `21-jre` runtime) with the RBH2 binaries **baked** (build context 365 MB — the 459 MB RBH1 golden is `.dockerignore`d), HAProxy `mode tcp` + 2 instances in `docker compose` summing to exactly **1.0 CPU / 350 MB** (haproxy 0.15/32M + api‑1/api‑2 0.425/159M each). Validated on a live Docker daemon: real peak **103 MiB / 350**, `OOMKilled=false`, official k6 `final_score` **3611–4394** (HotSpot, within the 3000–4500 budget). Public baked image + orphan `submission` branch (3 files, no code); `docker push` and the upstream PR are the author's outward‑facing steps.
+- **Wave 5** — GraalVM Native Image + PGO removes JIT warm‑up and trims constant factors; **must re‑validate** Wave‑2b Gate A and the Wave‑3/4a/4b gates (silent Vector‑API→scalar regression risk).
 
 ## 7. Key design decisions & trade‑offs
 
@@ -274,7 +274,7 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 | Scalar distance leaving SIMD idle | **evaluated & closed** — SIMD measured slower here; scalar kept (see §7) | 2b |
 | Brute‑force O(n) k‑NN latency | **done** — HNSW graph walk, p99 ≈ 0.145 ms (≈430× vs brute) | 3 |
 | 350 MB budget — jar bundled the `.gz`; `hnsw.bin` ≈460 MB > 350 MB alone | **done (4a)** — RBH2 lossless ≈300 MB, jar 41 KB, offline prebuild, `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | 4a |
-| Containerization / HAProxy / 2 instances / official k6 / `submission` | spec + tutorial ready; hand‑impl + validation pending (needs Docker daemon) | 4b |
+| Containerization / HAProxy / 2 instances / official k6 / `submission` | **done (4b)** — baked public image, HAProxy `mode tcp`, `docker compose` 1.0 CPU/350 MB; live‑daemon validated: peak 103 MiB, no OOM, k6 `final_score` 3611–4394; `submission` branch built (`docker push`/PR remain author steps) | 4b |
 | JIT warm‑up, no PGO | open | 5 (GraalVM Native Image + PGO; re‑validate Gate A + Wave‑3/4a/4b gates) |
 | No chunked encoding / pipelining / 4 KB request cap | out of scope by design (the Rinha payload is small and fixed) | — |
 | Readiness implied by a successful bind | acceptable (dataset+graph mapped before bind); proper gating | 4 |
@@ -316,6 +316,28 @@ java -Xmx256m --add-modules jdk.incubator.vector -cp target/classes:target/test-
 
 The build tutorials ([`TUTORIAL_JSON_KNN.md`](TUTORIAL_JSON_KNN.md), [`TUTORIAL_INT8_QUANT.md`](TUTORIAL_INT8_QUANT.md), [`TUTORIAL_SIMD.md`](TUTORIAL_SIMD.md), [`TUTORIAL_HNSW.md`](TUTORIAL_HNSW.md)) define per‑component test points that gate each stage before the end‑to‑end oracles. The frozen `float` baseline (`docs/baselines/onda1-approved-2000.txt`) and a 100‑entry `example-references.json` are committed for fast checks without the 3M file. `references.bin` and `hnsw.bin` are gitignored and regenerated on first boot.
 
+### Wave 4b — containerized stack ([`TUTORIAL_CONTAINER.md`](TUTORIAL_CONTAINER.md))
+
+Wave 4b adds no Java; it validates the *deployment*. The image is built with the RBH2 binaries baked (`Dockerfile` + `.dockerignore` at the repo root; `docker build` context = `fraudDetection/`). Closure needs all four gates green on a **live Docker daemon** (no `systemd-run` proxy — 4b is intrinsically Docker):
+
+| Gate | What it checks | Threshold | Wave‑4b result |
+| --- | --- | --- | --- |
+| 1 — e2e LB | `docker compose up` (haproxy + api‑1 + api‑2); both official oracles **through HAProxy** `:9999` | 3 `running`, `/ready` 200, oracles byte‑exact | ✅ 3/3 running, `/ready` 200, `tx-1329056812`→`{"approved":true,"fraud_score":0.0}` / `tx-3330991687`→`{"approved":false,"fraud_score":1.0}`; `hnsw pronto` in logs |
+| 2 — resources | `docker stats` under k6 load; per‑service cgroup sums | Σ MEM < 350 MiB, CPU ≤ ~100 %, no `OOMKilled` | ✅ peak **103.0 MiB** (api‑1 44.6 / api‑2 43.5 / haproxy 14.8), CPU ≤ ~10 %/ctr, `OOMKilled=false` ×3 |
+| 3 — k6 official | `test/test.js` ramp 1→900 RPS / 120 s via LB | measurement (no threshold; HotSpot ≈ 3000–4500) | ✅ `final_score` **3611.51 / 4393.85** (2 runs), `http_errors:0`, `failure_rate:0.3%` |
+| 4 — submission | clone `--branch submission --depth 1` → `docker compose up` (image‑only, no build) | image pull only, `/ready` 200, oracles exact, `info.json`/`participants` schema | ✅ local `file://` simulation green (remote confirmed after author `docker push` + `git push`) |
+
+Resource split (compose `deploy.resources.limits`, summing to the 1.0 CPU / 350 MB Rinha budget): `haproxy` 0.15 CPU / 32 M, `api‑1` & `api‑2` 0.425 CPU / 159 M each. HAProxy is `mode tcp` (raw byte passthrough; the app speaks HTTP/1.1 by hand) with `nbthread 1`. The `submission` branch is an orphan with **exactly 3 files** (`docker-compose.yml`, `docker/haproxy.cfg`, `info.json`) referencing the public image — no code, no binaries, no `Dockerfile`. Reproduce:
+
+```bash
+# from fraudDetection/ (Dockerfile + .dockerignore at root; binaries baked from Wave 4a)
+docker build -t docker.io/<user>/rinha-fraud:onda4b .
+docker compose up -d
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9999/ready          # => 200
+# Gate 3 (official k6, sibling repo): cd ../rinha-de-backend-2026 && ./run.sh
+docker compose down
+```
+
 ## 10. References
 
 - [`README.md`](../README.md) — project overview, quickstart, status
@@ -329,4 +351,4 @@ The build tutorials ([`TUTORIAL_JSON_KNN.md`](TUTORIAL_JSON_KNN.md), [`TUTORIAL_
 
 ---
 
-*This document describes the system as built at the close of Wave 4a (fit‑in‑350 MB / RBH2). When a wave changes the implementation, update the affected component sections, the §1 naming table, and §8/§9 in the same change.*
+*This document describes the system as built at the close of Wave 4b (containerized — baked public image + HAProxy `mode tcp` + 2 instances, 1.0 CPU / 350 MB). When a wave changes the implementation, update the affected component sections, the §1 naming table, and §8/§9 in the same change.*

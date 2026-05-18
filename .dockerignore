@@ -1,0 +1,8 @@
+.git
+**/target
+**/*.json.gz
+**/hnsw.rbh1.golden
+**/example-references.json
+docs
+*.md
+.claude
