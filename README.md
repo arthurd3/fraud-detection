@@ -217,7 +217,7 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 | **4a** | Fit in 350 MB — `hnsw.bin` RBH2 lossless (int24 + sparse upper) + offline prebuild + `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | ✅ **Complete** |
 | **4b** | Containerization (HotSpot) + HAProxy + official k6 + ≥2 instances + submission | ✅ **Complete** — live‑daemon validated; `docker push`/PR pending |
 | **5** | GraalVM Native Image + PGO (Oracle GraalVM 21, GFTC) — AOT 12 MB binary, no JIT warm‑up | ✅ **Complete** — validated 2026‑05‑18; official k6 `final_score` **4393.85** @ p99 **0.59 ms**, `http_errors` 0, no `OOMKilled`. Dead `sqDistI8` SIMD removed (broke the Native link); `sqDistI8Scalar` byte‑identical ⇒ behaviour unchanged. **Closes the project**; `docker push`/`git push`/PR pending |
-| **6** | Optional micro‑optimizations (e.g. eliminating the `takeTop5` drain) | ⚪ Optional — not required; the project is technically complete at Wave 5 |
+| **6** | Optional micro‑optimizations (e.g. eliminating the `takeTop5` drain) | ⚪ Optional — spec+tutorial ready (`takeTop5` zero‑alloc + LICENSE); hand‑impl pending. Project already complete at Wave 5 |
 
 The full roadmap, with the per‑stage performance reasoning, is in [`docs/RINHA_PLAN.md`](docs/RINHA_PLAN.md) (PT‑BR).
 

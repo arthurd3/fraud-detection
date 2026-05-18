@@ -288,6 +288,7 @@ The HNSW search is already **sub‑millisecond on HotSpot** — the search line 
 | JIT warm‑up, no PGO | **done (5)** — GraalVM Native Image + PGO (Oracle GraalVM 21, GFTC). AOT binary 12 MB, **no warm‑up**, official k6 `final_score` **4393.85** @ p99 **0.59 ms**, `http_errors` 0; dead `sqDistI8` SIMD removed (broke the Native link, 0 callers — Gate A reinterpreted), `sqDistI8Scalar` byte‑identical ⇒ Gate B unchanged. **Closes the technical roadmap.** | 5 |
 | No chunked encoding / pipelining / 4 KB request cap | out of scope by design (the Rinha payload is small and fixed) | — |
 | Readiness implied by a successful bind | acceptable (dataset+graph mapped before bind); proper gating | 4 |
+| The one `takeTop5` heap drain (§5) + no `LICENSE` | **optional** — *Wave 6 spec+tutorial ready (optional; hand‑impl pending) — see `docs/superpowers/specs/2026-05-18-onda6-zeroalloc-license-design.md`*; behaviour byte‑identical by design (not yet implemented) | 6 |
 
 None of the open items are accidental — each is a planned successor. **With Wave 5 done, the technical roadmap is closed**; the only remaining work is Wave 6 (optional micro‑optimizations — e.g. eliminating the `takeTop5` drain, §5) and the author's outward‑facing publish steps (`docker push docker.io/arthurd3/rinha-fraud:onda5`, `git push origin main`/`submission`, upstream PR adding `participants/arthurd3.json`).
 

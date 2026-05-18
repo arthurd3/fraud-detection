@@ -1128,6 +1128,21 @@ Cada onda é uma **mini-aula**. Pré-requisitos linkam para `CONCEITOS.md`. Risc
 > `HnswScratch`) — era listado como candidato "Onda 5" no `ARCHITECTURE.md`
 > §5, mas a Onda 5 foi puramente AOT+PGO (preservou comportamento, Gate B),
 > então passa a ser item de Onda 6.
+>
+> ✅ **Sub‑nota 2026‑05‑18 — spec + tutorial prontos (impl. à mão pendente).**
+> Os itens **`takeTop5` zero‑alloc** (eliminar o `int[n]` por query drenando
+> para `HnswScratch.tN`/`tD` reusados — `int[CAP]`, abordagem A,
+> byte‑idêntico por construção) e **`LICENSE` MIT** (Copyright (c) 2026
+> arthurd3) agora têm **spec** committado
+> (`docs/superpowers/specs/2026-05-18-onda6-zeroalloc-license-design.md`,
+> commit `a6e330a`) e **tutorial** (`docs/TUTORIAL_ZEROALLOC.md`). Status =
+> **spec + tutorial prontos; implementação à mão pendente** (driven‑by‑tutorial,
+> igual às ondas anteriores: o autor implementa, Claude valida Gates 1
+> [byte‑idêntico: `RecallHnsw` 96,89 %/99,90 % idêntico, `Rbh2Equiv` 0/3 M, 2
+> oráculos] + 2 [zero‑alloc provado via `ThreadMXBean`] + 3 [k6 opcional]).
+> Comportamento byte‑idêntico (sem mudança de score). Os demais itens da §9.6
+> (grid‑search M/ef, `sendfile`, prefetch mmap, auditoria NIO) **permanecem
+> opcionais e não especificados**.
 
 - Substituir `com.sun.net.httpserver` paths residuais por NIO 100%.
 - Tunar HNSW (M, ef_construction, ef_search) por grid search.
