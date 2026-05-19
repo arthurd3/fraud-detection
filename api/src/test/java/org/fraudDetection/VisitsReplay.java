@@ -53,7 +53,7 @@ public final class VisitsReplay {
         int cap = 54100;
         int[] vis = new int[cap], pg = new int[cap], ln = new int[cap];
         int total = 0, parseFail = 0, trunc = 0;
-        long sVis = 0, sPg = 0, sLn = 0;
+        long sVis = 0, sPg = 0, sLn = 0, sP = 0, sB = 0, sD = 0;
 
         TestDataReader.Entry e;
         while ((e = rd.next()) != null && total < limit) {
@@ -72,6 +72,7 @@ public final class VisitsReplay {
             if (tree.lastAccessTrunc()) trunc++;
             if (total < cap) { vis[total] = v; pg[total] = p; ln[total] = l; }
             sVis += v; sPg += p; sLn += l;
+            sP += tree.lastVPrime(); sB += tree.lastVBBF(); sD += tree.lastVDescend();
             total++;
         }
 
@@ -79,6 +80,9 @@ public final class VisitsReplay {
         report("visits        ", vis, m, sVis);
         report("distinctPages ", pg, m, sPg);
         report("distinctLines ", ln, m, sLn);
+        long mm = m == 0 ? 1 : m;
+        System.out.printf("visits-breakdown mean: prime=%d  bbf=%d  descend=%d  (total=%d)%n",
+                sP / mm, sB / mm, sD / mm, sVis / mm);
         System.out.println("──────────────────────────────────────────────────────────");
         System.out.println("entries: " + total + "  parseFail: " + parseFail
                 + "  accessLog-trunc: " + trunc + (trunc > 0 ? "  ⚠ (raise cap)" : ""));

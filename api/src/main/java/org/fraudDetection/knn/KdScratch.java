@@ -19,7 +19,13 @@ final class KdScratch {
     final int[] fanOutBuf = new int[KdTree.PRIME_FANOUT_COUNT];
     int fanOutCount;
     int visits;
+    int vPrime, vBBF, vDescend; // Onda 9: breakdown de visits (prime / BBF / descend-fallback)
 
+    // Onda 9 achado (sweep 256..8192 = ZERO mudança; watermarks medidos
+    // maxHeap≈165 / maxPool≈104 « 256 ⇒ os caps NUNCA são atingidos). O
+    // fallback recursivo `descend` (~42% das visitas) é disparado pelo CORTE
+    // DE PROFUNDIDADE (BBF_MAX_DEPTH/TOP_BBOX_DEPTH=18), não pelos caps —
+    // logo mexer nos caps é no-op. Constante simples (não tunar).
     static final int BBF_HEAP_CAP = 256;
     static final int BBF_POOL_CAP = 256;
     final int[] bbfTreeIdx = new int[BBF_HEAP_CAP];

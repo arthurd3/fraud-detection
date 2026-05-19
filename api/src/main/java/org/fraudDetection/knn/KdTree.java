@@ -132,6 +132,9 @@ public final class KdTree {
 
     // Onda 8 instrumentation accessors (valid after a search() with INSTR=true).
     public int lastVisits()          { return scratch.visits; }
+    public int lastVPrime()          { return scratch.vPrime; }
+    public int lastVBBF()            { return scratch.vBBF; }
+    public int lastVDescend()        { return scratch.vDescend; }
     public int lastDistinctPages()   { return distinctUnits(scratch, 4096); }
     public int lastDistinctLines()   { return distinctUnits(scratch, 64); }
     public boolean lastAccessTrunc() { return scratch.accessTrunc; }
@@ -280,7 +283,7 @@ public final class KdTree {
         s.results.clear();
         int[] slab = s.slab;
         for (int d = 0; d < DIMS; d++) slab[d] = 0;
-        s.visits = 0;
+        s.visits = 0; s.vPrime = 0; s.vBBF = 0; s.vDescend = 0;
         s.bbfSize = 0;
         s.bbfSlabNext = 0;
         s.poolSize = 0;
@@ -311,7 +314,7 @@ public final class KdTree {
 
     private void primeRecurse(int treeIdx, KdScratch s, int k, int depth) {
         if (treeIdx < 0) return;
-        s.visits++;
+        s.visits++; s.vPrime++;
         int dist = distSumI16(s, treeIdx);
         considerNode(s, treeIdx, dist, s.results.size() >= k, k);
         int leftAndDim = leftAndDimAt(treeIdx);
@@ -340,7 +343,7 @@ public final class KdTree {
 
     private void plunge(int treeIdx, KdScratch s, int k) {
         while (treeIdx >= 0) {
-            s.visits++;
+            s.visits++; s.vPrime++;
             int dist = distSumI16(s, treeIdx);
             considerNode(s, treeIdx, dist, s.results.size() >= k, k);
             int leftAndDim = leftAndDimAt(treeIdx);
@@ -364,7 +367,7 @@ public final class KdTree {
                 if (slot >= 0 && bboxPrunesI16Sum(s, slot, threshSum)) return;
             }
         }
-        s.visits++;
+        s.visits++; s.vDescend++;
         int dist = distSumI16(s, treeIdx);
         considerNode(s, treeIdx, dist, s.results.size() >= k, k);
         int leftAndDim = leftAndDimAt(treeIdx);
@@ -449,7 +452,7 @@ public final class KdTree {
                     if (slot >= 0 && bboxPrunesI16Sum(s, slot, thresholdSum)) return;
                 }
             }
-            s.visits++;
+            s.visits++; s.vBBF++;
             int dist = distSumI16(s, treeIdx);
             if (!full) {
                 if (!s.results.contains(treeIdx)) {
