@@ -239,7 +239,13 @@ public final class KdTreeBuilder {
 
     // ── Onda 8 Fase 2: BFS-blocked relayout (pure node-index permutation) ─────────────
 
-    /** Top {@code 1<<BLOCK_HEIGHT}-1 ≤ 63 nodes per block ≈ ≤2520 B ≤ 1 page. */
+    /**
+     * BFS-blocked relayout block height: 6 ⇒ ≤2^6-1=63 nodes/block ≈ ≤2520 B
+     * ≤ 1 page (4 KB). Fase-1 grid-search (BH 4..12, deterministic replay,
+     * 2026-05-19) CONFIRMED 6 is optimal — distinctPages mean: BH6=31 (best),
+     * 7=34, 5=38, 4/8=35, 12=49. Kept a plain constant (no runtime knob):
+     * simplicity wins, zero measured gain elsewhere.
+     */
     static final int BLOCK_HEIGHT = 6;
 
     private static int leftAndDimOf(short[] pts, int t) {
