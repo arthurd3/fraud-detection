@@ -431,5 +431,8 @@ oráculos pelo LB no nativo) + Gate C (binário/RSS < 80 MB, sem warmup) + Gate 
   submeter prévia oficial via issue `rinha/test`.
 - **Fechamento do projeto:** `LICENSE` (MIT é o comum em Rinha) antes de
   publicar; conferir `participants/arthurd3.json` no upstream.
+  > ✅ **LICENSE MIT adicionado 2026‑05‑18 (Onda 6)** — `LICENSE` (Copyright
+  > (c) 2026 arthurd3) já está na raiz do repositório (ver `RINHA_PLAN.md`
+  > §9.6, sub‑nota validada).
 
 **Onda 5 é a última onda técnica — o projeto fecha aqui.** 🏁🏆

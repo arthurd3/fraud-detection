@@ -5,8 +5,9 @@
 ![Java](https://img.shields.io/badge/Java-21%20LTS-007396)
 ![Build](https://img.shields.io/badge/build-Maven%20(wrapper)-C71A36)
 ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-success)
-![Status](https://img.shields.io/badge/Waves%201--5-complete%20%E2%9C%94-success)
+![Status](https://img.shields.io/badge/Waves%201--6-complete%20%E2%9C%94-success)
 ![Native](https://img.shields.io/badge/GraalVM%20Native%20%2B%20PGO-final__score%204393-success)
+![License](https://img.shields.io/badge/License-MIT-success)
 
 **Status:** Waves 1–5 **complete** — `int8` off‑heap mmap dataset + a hand‑rolled **HNSW** index + **RBH2** lossless compaction, **containerized**, now a **GraalVM Native Image + PGO** AOT binary. `POST /fraud-score` validated end‑to‑end against both official oracles; recall@5 96.89 % / approved‑agreement 99.90 %. Wave 4a proved the **350 MB budget** (147 MiB / 2 inst. under a `systemd-run` cgroup proxy); Wave 4b containerized it (a public baked image + HAProxy `mode tcp` + 2 instances in `docker compose`, exactly **1.0 CPU / 350 MB**; live‑daemon `final_score` **3611–4394** HotSpot). **Wave 5 (validated 2026‑05‑18, on‑device with the Oracle GraalVM 21 builder)** turned it into a **12 MB AOT native binary** with PGO — **no JIT warm‑up**: official k6 `final_score` **4393.85** at p99 **0.59 ms**, `http_errors` 0, no `OOMKilled` under the hard 350 MB cgroup. The dead `sqDistI8` SIMD path was removed (it broke the Native link; 0 callers since Wave 2b — see [ARCHITECTURE.md §4](docs/ARCHITECTURE.md#4-component-reference)); `sqDistI8Scalar` is byte‑identical, so production behaviour is unchanged (Gate B). **Wave 5 is the last technical wave — the project closes here** (Wave 6 = optional). The `docker push`, `git push`, and upstream PR are the author's outward‑facing steps.
 
@@ -206,6 +207,16 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 
 > Build evidence: `Graal compiler: optimization level: 3, target machine: x86-64-v3, PGO: user-provided` (`default.iprof` consumed offline; `--no-fallback`). `-march` corrected v2→**v3** (Haswell/AVX2). Image = `distroless/base-debian12`, entrypoint `/app/api 9999`, ≈399 MB (12 MB binary + 365 MB baked index + distroless glibc). **Wave 5 closes the technical roadmap** (Wave 6 = optional). Full gate detail in [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology).
 
+**Wave 6 — `takeTop5` zero‑alloc + LICENSE** ✅ *validated 2026‑05‑18*. Optional polish — `HnswIndex.takeTop5` now drains into the reused `HnswScratch.tN`/`tD` (`int[CAP]`, allocated once) instead of `new int[n]` ×2, making the production hot path **truly zero‑allocation per request**; behaviour is byte‑identical by construction. The project was already complete at Wave 5 (no score target — `final_score` unchanged):
+
+| Gate | Check | Result |
+| --- | --- | --- |
+| 1 — byte‑identical | HotSpot oracles unchanged after the buffer‑source change | ✅ `RecallHnsw` recall@5 **96.89 %** / approved‑agree **99.90 %** (FP=1 FN=1) **identical to Wave 5**; `Rbh2Equiv` **0 / 3,000,000**; both oracles byte‑exact via the HotSpot jar |
+| 2 — zero‑alloc | `AllocCheck` per‑query allocated bytes on the search path | ✅ **0 bytes / 100,000 queries → 0.00 B/query** (baseline pre‑Wave‑6 ≈ 400 B/query) — **PASS** |
+| 3 — official k6 | optional, non‑blocking | ⚪ not run — project closed at Wave 5, behaviour byte‑identical, no score target; Wave 5 `final_score` 4393.85 / p99 0.59 ms stands |
+
+> Wave 6 is the last (optional) wave. The `submission` branch is **not** bumped — a native `:onda6` rebuild is optional and behaviour‑identical; `:onda5` remains the valid closing artifact. Full detail in [ARCHITECTURE.md §5](docs/ARCHITECTURE.md#5-the-zero-allocation-hot-path).
+
 ## Project status & roadmap
 
 | Wave | Goal | Status |
@@ -217,7 +228,7 @@ Validated at the close of Wave 3 on a real server with the full 3M dataset at `-
 | **4a** | Fit in 350 MB — `hnsw.bin` RBH2 lossless (int24 + sparse upper) + offline prebuild + `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | ✅ **Complete** |
 | **4b** | Containerization (HotSpot) + HAProxy + official k6 + ≥2 instances + submission | ✅ **Complete** — live‑daemon validated; `docker push`/PR pending |
 | **5** | GraalVM Native Image + PGO (Oracle GraalVM 21, GFTC) — AOT 12 MB binary, no JIT warm‑up | ✅ **Complete** — validated 2026‑05‑18; official k6 `final_score` **4393.85** @ p99 **0.59 ms**, `http_errors` 0, no `OOMKilled`. Dead `sqDistI8` SIMD removed (broke the Native link); `sqDistI8Scalar` byte‑identical ⇒ behaviour unchanged. **Closes the project**; `docker push`/`git push`/PR pending |
-| **6** | Optional micro‑optimizations (e.g. eliminating the `takeTop5` drain) | ⚪ Optional — spec+tutorial ready (`takeTop5` zero‑alloc + LICENSE); hand‑impl pending. Project already complete at Wave 5 |
+| **6** | Optional micro‑optimizations (e.g. eliminating the `takeTop5` drain) | ✅ **Complete** — validated 2026‑05‑18: `takeTop5` now zero‑alloc (0 B/query proven), behaviour byte‑identical (RecallHnsw 96.89 %/99.90 % identical), LICENSE MIT added. Optional polish; project already complete at Wave 5 |
 
 The full roadmap, with the per‑stage performance reasoning, is in [`docs/RINHA_PLAN.md`](docs/RINHA_PLAN.md) (PT‑BR).
 
@@ -281,9 +292,10 @@ The **`submission`** branch (Wave 4b) is a separate **orphan** branch with exact
 - **SIMD:** ~~`jdk.incubator.vector` (Vector API)~~ — was explored in Wave 2b but **never wired into production** (3.8× slower for this shape) and **removed in Wave 5** (it broke the GraalVM Native link; the production distance is the scalar `sqDistI8Scalar`)
 - **Build:** Maven via the project wrapper (`./mvnw`); `native` profile uses `native-maven-plugin`
 - **Runtime dependencies:** none
+- **License:** MIT (added in Wave 6 — see [`LICENSE`](LICENSE))
 
 ## Author & license
 
 - **Author:** [@arthurd3](https://github.com/arthurd3) — repository: [`arthurd3/fraud-detection`](https://github.com/arthurd3/fraud-detection)
 - **Challenge:** [Rinha de Backend 2026](https://github.com/zanfranceschi/rinha-de-backend-2026) by [@zanfranceschi](https://github.com/zanfranceschi)
-- **License:** not yet declared. Add a `LICENSE` file before publishing if you intend to allow reuse (MIT is the common choice for Rinha submissions).
+- **License:** **MIT** — see [`LICENSE`](LICENSE) (Copyright (c) 2026 arthurd3). Added in Wave 6 (2026‑05‑18).

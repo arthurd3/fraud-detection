@@ -97,7 +97,7 @@ public final class HnswIndex {
     private static int takeTop5(int[] out) {
         // drena o max-heap; os 5 menores ficam no fim → reordena
         int n = HnswScratch.rSize;
-        int[] tn = new int[n], td = new int[n];
+        int[] tn = HnswScratch.tN, td = HnswScratch.tD;   // Onda 6: scratch reusado (era: new int[n] x2)
         for (int i = n-1; i >= 0; i--) { td[i]=HnswScratch.rMaxDist(); tn[i]=HnswScratch.rMaxNode(); HnswScratch.rPopMax(); }
         int k = Math.min(5, n);
         for (int i = 0; i < 5; i++) out[i] = i < k ? tn[i] : -1;

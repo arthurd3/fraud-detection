@@ -1,5 +1,15 @@
 # Tutorial — Onda 6: `takeTop5` zero-alloc + LICENSE (otimização final, opcional)
 
+> ✅ **Validada 2026‑05‑18.** Implementada por Claude (override pontual do
+> autor à regra "usuário coda à mão", igual Ondas 4b/5). **Gate 1
+> byte‑idêntico** (RecallHnsw 96,89 %/99,90 % idêntico à Onda 5, Rbh2Equiv
+> 0/3.000.000, 2 oráculos byte‑exatos) + **Gate 2 zero‑alloc** (0 B/query em
+> 100.000) **verdes**; **Gate 3 (k6) opcional não rodado** (projeto já
+> fechado na Onda 5, comportamento byte‑idêntico, sem alvo de score).
+> Commitada em `main`; `submission` **não** bumpado (rebuild nativo `:onda6`
+> = opcional, behavior‑idêntico — `:onda5` segue válido). O projeto técnico
+> já estava fechado na Onda 5.
+
 > De **Onda 5** (Native + PGO, projeto fechado: `final_score` 4393,85, p99
 > 0,59 ms) → fechar a **única "honest exception"** ao hot path zero-alloc e
 > adicionar o `LICENSE`. **Tempo estimado**: 30–60 min. **ZERO mudança de

@@ -1143,6 +1143,27 @@ Cada onda é uma **mini-aula**. Pré-requisitos linkam para `CONCEITOS.md`. Risc
 > Comportamento byte‑idêntico (sem mudança de score). Os demais itens da §9.6
 > (grid‑search M/ef, `sendfile`, prefetch mmap, auditoria NIO) **permanecem
 > opcionais e não especificados**.
+>
+> ✅ **Sub‑nota 2026‑05‑18 — `takeTop5` zero‑alloc + `LICENSE` MIT
+> IMPLEMENTADOS + VALIDADOS.** Implementados nesta sessão (override pontual
+> do autor à regra "usuário coda à mão", igual às Ondas 4b/5): `takeTop5`
+> drena para `HnswScratch.tN`/`tD` reusados (`int[CAP]`, alocados 1× em
+> `init()`) em vez de `new int[n]` ×2 — byte‑idêntico por construção; e o
+> `LICENSE` MIT (Copyright (c) 2026 arthurd3) na raiz do repositório.
+> **Gate 1 (byte‑idêntico, bloqueia)** verde: `RecallHnsw 2000 50` recall@5
+> **96,89 %** / approved‑agree **99,90 %** (FP=1 FN=1) **idêntico à Onda 5**;
+> `Rbh2Equiv` **0/3.000.000**; 2 oráculos byte‑exatos pelo jar HotSpot.
+> **Gate 2 (zero‑alloc, bloqueia)** verde: `AllocCheck 100000` → **0 bytes /
+> 100.000 queries → 0,00 B/query → PASS** (baseline pré‑Onda‑6 ≈ 400 B/query).
+> **Gate 3 (k6, opcional, não bloqueia)** **não rodado** — o projeto fechou
+> na Onda 5, comportamento byte‑idêntico, sem alvo de score; o `final_score`
+> 4393,85 / p99 0,59 ms da Onda 5 permanece. O hot path de produção
+> (`search`→`top5Hnsw`→`searchLayer`/`takeTop5`) é agora **zero‑alloc por
+> request** de verdade (resta só o bootstrap único). Onda 6 é a **última**
+> onda (opcional); o `submission` **não** foi bumpado (rebuild nativo
+> `:onda6` opcional, behavior‑idêntico — `:onda5` segue artefato de
+> fechamento válido). Os demais itens da §9.6 (grid‑search M/ef, `sendfile`,
+> prefetch mmap, auditoria NIO) **seguem opcionais e não implementados**.
 
 - Substituir `com.sun.net.httpserver` paths residuais por NIO 100%.
 - Tunar HNSW (M, ef_construction, ef_search) por grid search.

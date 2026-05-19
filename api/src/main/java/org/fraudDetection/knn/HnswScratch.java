@@ -12,6 +12,8 @@ public final class HnswScratch {
     public static int[] cN, cD; public static int cSize;
     // resultado: MAX-heap por dist (raiz = mais distante; evict quando passa de ef)
     public static int[] rN, rD; public static int rSize;
+    // drain do top-5 (reusado — zero-alloc por query; Onda 6)
+    public static int[] tN, tD;
 
     // buffers de record RB2 (16 bytes) p/ a distância
     public static byte[] bufA, bufB;
@@ -23,6 +25,7 @@ public final class HnswScratch {
         visited = new int[n]; gen = 0;
         cN = new int[CAP]; cD = new int[CAP];
         rN = new int[CAP]; rD = new int[CAP];
+        tN = new int[CAP]; tD = new int[CAP];   // Onda 6
         bufA = new byte[16]; bufB = new byte[16];
     }
     public static void newQuery() { gen++; cSize = 0; rSize = 0; }
