@@ -53,4 +53,18 @@ final class KdScratch {
     int maxPool;
 
     void resetWatermarks() { maxHeap = 0; maxPool = 0; }
+
+    // ── Onda 8 instrumentation (used ONLY when KdTree.INSTR; lazily allocated;
+    //    zero state/cost in production where INSTR stays false). Records the
+    //    treeIdx touched per query so the offline replay can measure the
+    //    HW-independent memory-locality predictor (distinct 4 KB pages / 64 B
+    //    cache lines of `pts` per query) — the metric the vEB/BFS relayout
+    //    targets (s.visits is unchanged by a relayout; locality is not). ──────
+    int[] accessLog;     // treeIdx per visited node (cap; truncates if exceeded)
+    int   accessCount;
+    boolean accessTrunc;
+    int[] pageGen;       // generation-stamp per 4 KB page of pts
+    int[] lineGen;       // generation-stamp per 64 B line of pts
+    int   pageStamp;
+    int   lineStamp;
 }

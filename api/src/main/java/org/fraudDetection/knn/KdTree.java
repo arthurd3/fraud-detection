@@ -60,6 +60,17 @@ public final class KdTree {
     public static KdTree INSTANCE;
 
     /**
+     * Onda 8 instrumentation switch — {@code static final} from system property
+     * {@code -Dfd.instr=true}. Absent (production / submission native image):
+     * folds to {@code false} at GraalVM build-time static-init ⇒ the
+     * {@code if (INSTR)} sites are dead-code-eliminated → ZERO cost, ZERO
+     * behavior change (G2 stays 0-div). Set only by offline replays
+     * (HotSpot, {@code java -Dfd.instr=true}) to read the HW-independent
+     * memory-locality predictor via {@link #lastDistinctPages()}.
+     */
+    public static final boolean INSTR = Boolean.getBoolean("fd.instr");
+
+    /**
      * Production load: mmap {@code references.kdt} (off-heap pts/origId) +
      * best-effort hints/prewarm. {@code Main} calls this instead of the legacy
      * MmapDataset/HnswIndex load.
@@ -119,6 +130,31 @@ public final class KdTree {
     public int bbfHeapCap()  { return KdScratch.BBF_HEAP_CAP; }
     public int bbfPoolCap()  { return KdScratch.BBF_POOL_CAP; }
 
+    // Onda 8 instrumentation accessors (valid after a search() with INSTR=true).
+    public int lastVisits()          { return scratch.visits; }
+    public int lastDistinctPages()   { return distinctUnits(scratch, 4096); }
+    public int lastDistinctLines()   { return distinctUnits(scratch, 64); }
+    public boolean lastAccessTrunc() { return scratch.accessTrunc; }
+
+    /** Distinct {@code unitBytes}-aligned units of {@code pts} touched this query
+     *  (a 40 B node may straddle one boundary → start+end unit both counted). */
+    private int distinctUnits(KdScratch s, int unitBytes) {
+        if (s.accessLog == null) return 0;
+        int[] gen = (unitBytes == 4096) ? s.pageGen : s.lineGen;
+        int stamp = (unitBytes == 4096) ? (++s.pageStamp) : (++s.lineStamp);
+        final int strideBytes = STRIDE * 2;
+        int cnt = 0, m = s.accessCount;
+        int[] log = s.accessLog;
+        for (int i = 0; i < m; i++) {
+            long b0 = (long) log[i] * strideBytes;
+            int u0 = (int) (b0 / unitBytes);
+            int u1 = (int) ((b0 + strideBytes - 1) / unitBytes);
+            if (gen[u0] != stamp) { gen[u0] = stamp; cnt++; }
+            if (u1 != u0 && gen[u1] != stamp) { gen[u1] = stamp; cnt++; }
+        }
+        return cnt;
+    }
+
     // ── Nav / feature access (heap or mmap) ──────────────────────────────────────────
 
     /** i16 feature value at permuted lane {@code d} of the node at {@code treeIdx}. */
@@ -161,6 +197,10 @@ public final class KdTree {
     // ── Distance kernel: scalar i16, int32 (contest sum < 2^31; see DistanceFunctions) ─
 
     private int distSumI16(KdScratch s, int treeIdx) {
+        if (INSTR) {
+            if (s.accessCount < s.accessLog.length) s.accessLog[s.accessCount++] = treeIdx;
+            else s.accessTrunc = true;
+        }
         short[] q = s.permutedQueryI16;
         int base = treeIdx * STRIDE;
         int sum = 0;
@@ -245,6 +285,17 @@ public final class KdTree {
         int[] perm = KdLayout.DIM_PERMUTATION;
         for (int d = 0; d < DIMS; d++) pqi[d] = Quantizer.q16(querySemantic[perm[d]]);
         for (int d = DIMS; d < STRIDE; d++) pqi[d] = 0;
+
+        if (INSTR) {
+            if (s.accessLog == null) {
+                s.accessLog = new int[1 << 20];
+                long bytes = (long) n * STRIDE * 2L;
+                s.pageGen = new int[(int) (bytes / 4096) + 2];
+                s.lineGen = new int[(int) (bytes / 64) + 2];
+            }
+            s.accessCount = 0;
+            s.accessTrunc = false;
+        }
     }
 
     // ── Prime (fan-out + plunge to pre-fill top-K) ───────────────────────────────────
