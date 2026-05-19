@@ -12,13 +12,13 @@ services:
       resources:
         limits: { cpus: "0.15", memory: "32M" }
   api-1:
-    image: docker.io/arthurd3/rinha-fraud:onda7
+    image: docker.io/arthurd3/rinha-fraud:onda8
     networks: [app]
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
   api-2:
-    image: docker.io/arthurd3/rinha-fraud:onda7
+    image: docker.io/arthurd3/rinha-fraud:onda8
     networks: [app]
     deploy:
       resources:
