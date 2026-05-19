@@ -1,7 +1,6 @@
 package org.fraudDetection;
 
-import org.fraudDetection.dataset.MmapDataset;
-import org.fraudDetection.knn.HnswIndex;
+import org.fraudDetection.knn.KdTree;
 import org.fraudDetection.server.NioServer;
 
 public class Main {
@@ -13,11 +12,12 @@ public class Main {
     public static void main(String[] args) throws Exception {
         String d = dataPath();
         long t0 = System.currentTimeMillis();
-        MmapDataset.load(d + "/references.json.gz", d + "/references.bin");
-        System.out.println("dataset loaded: " + MmapDataset.count
-                + " vectors (" + (System.currentTimeMillis() - t0) + " ms)");
-        HnswIndex.load(d + "/hnsw.bin");
-        System.out.println("hnsw pronto");
+        // Onda 7 v2: EXACT KD-tree (RKD3) mmap. Replaces the legacy int8
+        // MmapDataset + HNSW load — the fraud decision is now byte-identical
+        // to the official ground truth.
+        KdTree.load(d + "/references.kdt");
+        System.out.println("kdtree loaded: " + KdTree.INSTANCE.size()
+                + " nós (" + (System.currentTimeMillis() - t0) + " ms)");
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 9999;
         new NioServer(port).start();
     }

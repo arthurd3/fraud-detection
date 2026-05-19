@@ -47,3 +47,6 @@ src/main/resources/references.bin
 ### Rinha HNSW (local, regenerável) ###
 src/main/resources/hnsw.bin
 src/main/resources/hnsw.rbh1.golden
+
+### Rinha EXACT KD-tree (Onda 7 v2, local/baked, regenerável offline) ###
+src/main/resources/references.kdt

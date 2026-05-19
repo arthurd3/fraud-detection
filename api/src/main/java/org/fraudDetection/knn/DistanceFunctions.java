@@ -21,4 +21,58 @@ public final class DistanceFunctions {
         for (int k = 0; k < 16; k++) { int d = q[k] - v[k]; acc += d * d; }
         return acc;
     }
+
+    // ─────────────────────────── Onda 7 v2 (EXACT KD-tree) ───────────────────────────
+
+    /**
+     * Squared L2 in i16 units with a LONG accumulator. int32 overflows here:
+     * (Δ ≤ 20000)² · 14 ≈ 5.6e9 &gt; 2^31. The KD-tree's internal i16 kernel may
+     * keep int32 (contest sum &lt; 2^31 by the dims-5/6-only-sentinel invariant),
+     * but this standalone helper used by tests/brute MUST be long.
+     *
+     * @param q permuted-or-semantic i16 query (first 14 lanes used)
+     * @param v permuted-or-semantic i16 ref   (first 14 lanes used; same order as q)
+     */
+    public static long sqDistI16(short[] q, short[] v) {
+        long acc = 0;
+        for (int i = 0; i < 14; i++) {
+            long d = q[i] - v[i];
+            acc += d * d;
+        }
+        return acc;
+    }
+
+    /** C round4: round(x*10000)/10000, round-half-away-from-zero == Math.round for the
+     *  contest's non-negative dims and exact for the -1 sentinel
+     *  (Math.round(-10000.0) = -10000). */
+    public static double round4(double x) {
+        return Math.round(x * 10000.0) / 10000.0;
+    }
+
+    /**
+     * IDENTICAL to main.c {@code euclidean_dist(vec, refs[i].v)}:
+     * Σ over SEMANTIC dims 0..13 of {@code (a-b)²} in double, where
+     * {@code a = round4(query_semantic[i])} and {@code b = refI16Semantic[i] / 10000.0}.
+     *
+     * <p>C's {@code vec[]} and {@code refs[].v[]} are both {@code round4(orig)} =
+     * {@code round(orig*10000.0)/10000.0}, i.e. exactly {@code k/10000.0} for integer
+     * k. Our ref i16 store is that integer k (lossless); {@code round4((double)queryFloat)}
+     * recovers the query's k (queryVector is already round4'd, float→double→round4 is
+     * idempotent and the *0.5e-3 error is far below 0.5). Both sides are therefore the
+     * exact same {@code (double)long / 10000.0} as C, and the per-term double rounding /
+     * accumulation order (semantic 0..13) match C's loop bit-for-bit.
+     *
+     * @param querySemantic14 the parsed query in SEMANTIC order (round4'd floats)
+     * @param refI16Semantic   the candidate ref's i16 features in SEMANTIC order
+     */
+    public static double sqDistDoubleLikeC(float[] querySemantic14, short[] refI16Semantic) {
+        double sum = 0.0;
+        for (int i = 0; i < 14; i++) {
+            double a = round4((double) querySemantic14[i]);
+            double b = refI16Semantic[i] / 10000.0;
+            double d = a - b;
+            sum += d * d;
+        }
+        return sum;
+    }
 }

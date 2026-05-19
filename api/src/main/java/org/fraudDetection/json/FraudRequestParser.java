@@ -66,7 +66,8 @@ public final class FraudRequestParser {
         int ltVal = valPos(b, from, to, K_LAST_TRANSACTION);       // 'n' (null) ou '{'
         double minNorm, kmLastNorm;
         if (ltVal < 0) return PARSE_BAD;
-        if (b.get(ltVal) == 'n') {                                 // null
+        boolean lastNull = (b.get(ltVal) == 'n');
+        if (lastNull) {                                            // null
             minNorm = -1; kmLastNorm = -1;
         } else {                                                   // objeto { timestamp, km_from_current }
             int ltE  = matchBrace(b, ltVal, to);
@@ -79,26 +80,40 @@ public final class FraudRequestParser {
         }
 
         // ---- monta o vetor ----
-        v[0]  = (float) clamp(amount / MAX_AMOUNT);
-        v[1]  = (float) clamp(installments / MAX_INSTALLMENTS);
-        v[2]  = (float) clamp((amount / avgAmount) / AMOUNT_VS_AVG_RATIO);
-        v[3]  = (float) (hour / 23.0);
-        v[4]  = (float) (dow / 6.0);
-        v[5]  = (float) minNorm;
-        v[6]  = (float) kmLastNorm;
-        v[7]  = (float) clamp(kmFromHome / MAX_KM);
-        v[8]  = (float) clamp(txCount24h / MAX_TX_24H);
-        v[9]  = isOnline    ? 1f : 0f;
+        // Onda 7 v2: round4 EM DOUBLE antes do cast p/ float — replica
+        // main.c: entries[i].vec[j] = round4(normalize(...)) (linha ~774,
+        // todas as 14 dims). round4(x) = round(x*10000)/10000 (round-half-up
+        // == C round() p/ as dims não-negativas; -1 sentinela é exato:
+        // Math.round(-10000.0) = -10000 → -1.0). Dims 5/6 sentinela (-1)
+        // ficam LITERAIS -1f (NÃO round4 — armadilha (long)(-1*10000+0.5);
+        // round4(-1) == -1 de qualquer forma, mas seguimos o plano à risca).
+        v[0]  = r4(clamp(amount / MAX_AMOUNT));
+        v[1]  = r4(clamp(installments / MAX_INSTALLMENTS));
+        v[2]  = r4(clamp((amount / avgAmount) / AMOUNT_VS_AVG_RATIO));
+        v[3]  = r4(hour / 23.0);
+        v[4]  = r4(dow / 6.0);
+        v[5]  = lastNull ? -1f : r4(minNorm);
+        v[6]  = lastNull ? -1f : r4(kmLastNorm);
+        v[7]  = r4(clamp(kmFromHome / MAX_KM));
+        v[8]  = r4(clamp(txCount24h / MAX_TX_24H));
+        v[9]  = isOnline    ? 1f : 0f;                              // 0/1 exatos
         v[10] = cardPresent ? 1f : 0f;
-        v[11] = inArray(b, kmA, kmB, midA, midB) ? 0f : 1f;        // invertido
-        v[12] = (float) mccRisk(b, mccA, mccB);
-        v[13] = (float) clamp(merchAvg / MAX_MERCH_AVG);
+        v[11] = inArray(b, kmA, kmB, midA, midB) ? 0f : 1f;        // invertido; 0/1 exatos
+        v[12] = r4(mccRisk(b, mccA, mccB));
+        v[13] = r4(clamp(merchAvg / MAX_MERCH_AVG));
         return PARSE_OK;
     }
 
     // ===================== helpers =====================
 
     private static double clamp(double x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
+
+    /** C round4 then cast to float: (float)(round(x*10000)/10000).
+     *  Done in DOUBLE first so queryVector holds exactly k/10000 — the EXACT
+     *  double rerank then recovers k bit-identically to main.c. */
+    private static float r4(double x) {
+        return (float) (Math.round(x * 10000.0) / 10000.0);
+    }
 
     // ---- chaves (bytes, lowercase exato) ----
     private static final byte[] K_TRANSACTION     = b("transaction");

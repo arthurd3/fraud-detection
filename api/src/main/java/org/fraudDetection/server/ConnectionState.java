@@ -44,6 +44,11 @@ public class ConnectionState {
     public final byte[] queryQ   = new byte[16];
     public final byte[] vScratch = new byte[16];
 
+    // Onda 7 v2: permuted i16 query for the EXACT KD-tree (lanes 14-19 zero).
+    // Filled by KdTree.search from queryVector; not cleared on reset (overwritten
+    // each request).
+    public final short[] queryQ16 = new short[20];
+
     // Onda 3: top-5 ids do HNSW (lazy; zero-alloc após 1ª request; não limpa no reset)
     public int[] knn5;
 

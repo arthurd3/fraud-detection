@@ -2,3 +2,8 @@
 ### Gerado por Dockerfile.instr (--target export); regerável. Não versionar.
 ### O profile resultante (api/default.iprof) ESSE sim é versionado.
 _pgo/
+
+### Onda 7 v2 — EXACT KD-tree binário (RKD3), baked/offline, regenerável.
+### (regra efetiva em api/.gitignore; repetida aqui por completude)
+api/src/main/resources/references.kdt
+references.kdt
