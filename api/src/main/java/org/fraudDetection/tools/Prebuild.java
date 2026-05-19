@@ -41,7 +41,7 @@ public final class Prebuild {
         if (KdTreeIO.isValid(Path.of(kdt), N)) {
             System.out.println("references.kdt já válido (" + N + " nós) — pulando build");
         } else {
-            System.out.println("construindo references.kdt (EXACT KD-tree, RKD3)...");
+            System.out.println("construindo references.kdt (EXACT KD-tree, RKD4 BFS-blocked)...");
             float[] vecs = new float[N * DIMS];
             boolean[] fraud = new boolean[N];
             int n = streamGz(d + "/references.json.gz", vecs, fraud);

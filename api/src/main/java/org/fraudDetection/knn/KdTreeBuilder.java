@@ -53,6 +53,21 @@ public final class KdTreeBuilder {
         if (rootIdx != 0) throw new IllegalStateException("root not at 0: " + rootIdx);
         if (nextIdx[0] != n) throw new IllegalStateException("node count mismatch");
 
+        // ── Onda 8 Fase 2: relayout pré-ordem-DFS → BFS-blocked (vEB-like) ───────────
+        // PERMUTAÇÃO PURA dos índices de nó: mesma árvore/splits/fraud/origId,
+        // só muda treeIdx + ordem física. determinismo intacto (não toca
+        // buildRecursive/Random(42L)). E=0 por construção; ExactAgree 0-div prova.
+        // Bloco = topo de BLOCK_HEIGHT níveis contíguos em ordem BFS
+        // (≤2^BH-1=63 nós ≈ ≤2520 B ≤ 1 página 4 KB) ⇒ caminho raiz→folha cruza
+        // ~prof/BH blocos em vez de tocar páginas espalhadas pelos 120 MB.
+        {
+            short[] pts2 = new short[n * STRIDE];
+            int[] origId2 = new int[n];
+            relayoutBlocked(pts, origId, n, pts2, origId2);
+            pts = pts2;
+            origId = origId2;
+        }
+
         int[] topSlot = new int[n];
         Arrays.fill(topSlot, -1);
         int maxTopNodes = 1 << (KdTree.TOP_BBOX_DEPTH + 1);
@@ -219,6 +234,94 @@ public final class KdTreeBuilder {
             if (target < less) to = less;
             else if (target >= greater) from = greater;
             else return;
+        }
+    }
+
+    // ── Onda 8 Fase 2: BFS-blocked relayout (pure node-index permutation) ─────────────
+
+    /** Top {@code 1<<BLOCK_HEIGHT}-1 ≤ 63 nodes per block ≈ ≤2520 B ≤ 1 page. */
+    static final int BLOCK_HEIGHT = 6;
+
+    private static int leftAndDimOf(short[] pts, int t) {
+        int b = t * KdLayout.STRIDE;
+        return (pts[b + KdLayout.LANE_LEFT_DIM] & 0xFFFF)
+                | ((pts[b + KdLayout.LANE_LEFT_DIM + 1] & 0xFFFF) << 16);
+    }
+
+    private static int rightOf(short[] pts, int t) {
+        int b = t * KdLayout.STRIDE;
+        return (pts[b + KdLayout.LANE_RIGHT] & 0xFFFF)
+                | ((pts[b + KdLayout.LANE_RIGHT + 1] & 0xFFFF) << 16);
+    }
+
+    /**
+     * Renumber nodes from pre-order DFS into BFS-blocked order: each block is
+     * the top {@code BLOCK_HEIGHT} levels of a subtree laid out contiguously in
+     * BFS order; the ≤2^BH children hanging off the block bottom each start a
+     * new block (recursively, via an explicit work queue). Whole-tree root
+     * (old idx 0) → new idx 0. Pure permutation: features/fraud/origId copied
+     * verbatim, child links remapped through {@code newIdx} — tree, splits and
+     * results are byte-identical (E=0 by construction; ExactAgree proves it).
+     */
+    private static void relayoutBlocked(short[] pts, int[] origId, int n,
+                                        short[] pts2, int[] origId2) {
+        final int STRIDE = KdLayout.STRIDE;
+        final int DIMS = KdLayout.DIMS;
+        int[] newIdx = new int[n];
+        Arrays.fill(newIdx, -1);
+
+        int[] blockQ = new int[n];          // block roots to process (old idx)
+        int bqHead = 0, bqTail = 0;
+        blockQ[bqTail++] = 0;               // whole-tree root (pre-order idx 0)
+
+        int cap = 1 << BLOCK_HEIGHT;        // ≥ max nodes enqueued per block
+        int[] lq = new int[cap];
+        int[] ld = new int[cap];
+        int next = 0;
+
+        while (bqHead < bqTail) {
+            int r = blockQ[bqHead++];
+            int lh = 0, lt = 0;
+            lq[lt] = r; ld[lt] = 0; lt++;
+            while (lh < lt) {
+                int node = lq[lh]; int dep = ld[lh]; lh++;
+                if (node < 0) continue;
+                newIdx[node] = next++;
+                int lad = leftAndDimOf(pts, node);
+                int left = KdLayout.unpackLeft(lad);
+                int right = rightOf(pts, node);
+                if (dep + 1 < BLOCK_HEIGHT) {
+                    if (left  >= 0) { lq[lt] = left;  ld[lt] = dep + 1; lt++; }
+                    if (right >= 0) { lq[lt] = right; ld[lt] = dep + 1; lt++; }
+                } else {
+                    if (left  >= 0) blockQ[bqTail++] = left;
+                    if (right >= 0) blockQ[bqTail++] = right;
+                }
+            }
+        }
+        if (next != n) throw new IllegalStateException("relayout covered " + next + " != " + n);
+        if (newIdx[0] != 0) throw new IllegalStateException("relayout root not at new 0");
+
+        for (int old = 0; old < n; old++) {
+            int ni = newIdx[old];
+            int sb = old * STRIDE, db = ni * STRIDE;
+            for (int d = 0; d < DIMS; d++) pts2[db + d] = pts[sb + d];
+            pts2[db + KdLayout.LANE_FRAUD] = pts[sb + KdLayout.LANE_FRAUD];
+
+            int lad = leftAndDimOf(pts, old);
+            int oldLeft = KdLayout.unpackLeft(lad);
+            int dim = KdLayout.unpackDim(lad);
+            int newLeft = (oldLeft < 0) ? -1 : newIdx[oldLeft];
+            int packed = KdLayout.packLeftAndDim(newLeft, dim);
+            pts2[db + KdLayout.LANE_LEFT_DIM]     = (short) (packed & 0xFFFF);
+            pts2[db + KdLayout.LANE_LEFT_DIM + 1] = (short) ((packed >>> 16) & 0xFFFF);
+
+            int oldRight = rightOf(pts, old);
+            int newRight = (oldRight < 0) ? -1 : newIdx[oldRight];
+            pts2[db + KdLayout.LANE_RIGHT]     = (short) (newRight & 0xFFFF);
+            pts2[db + KdLayout.LANE_RIGHT + 1] = (short) ((newRight >>> 16) & 0xFFFF);
+
+            origId2[ni] = origId[old];
         }
     }
 }

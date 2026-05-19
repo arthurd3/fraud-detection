@@ -78,13 +78,13 @@ public final class KdTree {
     public static void load(String kdtPath) throws IOException {
         INSTANCE = KdTreeIO.loadMmap(Path.of(kdtPath));
         INSTANCE.applyMmapHints();
-        System.out.println("kdtree (RKD3, EXACT) mmap: " + INSTANCE.size() + " nós");
+        System.out.println("kdtree (RKD4, EXACT) mmap: " + INSTANCE.size() + " nós");
     }
 
     /** Heap load (tests/brute): on-heap arrays. */
     public static void loadHeap(String kdtPath) throws IOException {
         INSTANCE = KdTreeIO.load(Path.of(kdtPath));
-        System.out.println("kdtree (RKD3, EXACT) heap: " + INSTANCE.size() + " nós");
+        System.out.println("kdtree (RKD4, EXACT) heap: " + INSTANCE.size() + " nós");
     }
 
     /** Static facade used by FraudController (replaces HnswIndex.search). */

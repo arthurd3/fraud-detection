@@ -30,8 +30,11 @@ import java.nio.file.StandardOpenOption;
  */
 public final class KdTreeIO {
 
-    static final byte[] MAGIC = {'R', 'K', 'D', '3'};
-    static final int VERSION = 3;
+    // RKD4 (Onda 8 Fase 2): same byte layout as RKD3, but nodes are stored in
+    // BFS-blocked order (cache/page-local) instead of pre-order DFS. Bumping
+    // magic+ver invalidates any RKD3 .kdt so Prebuild regenerates it relaid.
+    static final byte[] MAGIC = {'R', 'K', 'D', '4'};
+    static final int VERSION = 4;
     private static final int HEADER_BYTES = 4 + 5 * 4; // magic + ver,n,dims,stride,root
     private static final int IO_CHUNK = 8 * 1024 * 1024;
 
@@ -142,7 +145,7 @@ public final class KdTreeIO {
         hdr.get(magic);
         if (magic[0] != MAGIC[0] || magic[1] != MAGIC[1]
                 || magic[2] != MAGIC[2] || magic[3] != MAGIC[3])
-            throw new IOException("bad magic (expected RKD3)");
+            throw new IOException("bad magic (expected RKD4)");
         int ver = hdr.getInt();
         int n = hdr.getInt();
         int dims = hdr.getInt();
