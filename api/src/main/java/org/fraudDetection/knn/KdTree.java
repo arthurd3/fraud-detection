@@ -188,7 +188,10 @@ public final class KdTree {
 
     public int origIdAt(int treeIdx) {
         if (origId != null) return origId[treeIdx];
-        return origBuf.getInt(treeIdx * 4);
+        int p = treeIdx * 3; // RKD5: origId packed uint24 LE
+        return (origBuf.get(p) & 0xFF)
+                | ((origBuf.get(p + 1) & 0xFF) << 8)
+                | ((origBuf.get(p + 2) & 0xFF) << 16);
     }
 
     private static int unpackLeft(int leftAndDim) { return KdLayout.unpackLeft(leftAndDim); }

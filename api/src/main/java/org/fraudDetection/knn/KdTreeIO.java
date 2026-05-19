@@ -9,14 +9,15 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 /**
- * Persist / reload the EXACT {@link KdTree}. Binary format {@code RKD3}, all
+ * Persist / reload the EXACT {@link KdTree}. Binary format {@code RKD5}, all
  * multi-byte values LITTLE-ENDIAN. Ported from jvmoonshot KdTreeIO.save with
- * the {@code origId} section KEPT (needed for the C origId tie-break).
+ * the {@code origId} section KEPT (needed for the C origId tie-break); nodes
+ * BFS-blocked (RKD4) and {@code origId} packed uint24 (RKD5).
  *
  * <pre>
- *   header : "RKD3"(4) + ver i32(=3) + n i32 + dims i32(=14) + stride i32(=20) + root i32(=0)
+ *   header : "RKD5"(4) + ver i32(=5) + n i32 + dims i32(=14) + stride i32(=20) + root i32(=0)
  *   pts    : short[n*20]                (14 permuted dims + leftAndDim + right + fraud + pad)
- *   origId : int32[n]
+ *   origId : uint24[n] LE               (ids < 3M < 2^24, lossless; was int32 ≤ RKD4)
  *   meta   : topNodeCount i32
  *   topBbox: short[topNodeCount*32]
  *   topSlot: int32[n]
@@ -30,11 +31,12 @@ import java.nio.file.StandardOpenOption;
  */
 public final class KdTreeIO {
 
-    // RKD4 (Onda 8 Fase 2): same byte layout as RKD3, but nodes are stored in
-    // BFS-blocked order (cache/page-local) instead of pre-order DFS. Bumping
-    // magic+ver invalidates any RKD3 .kdt so Prebuild regenerates it relaid.
-    static final byte[] MAGIC = {'R', 'K', 'D', '4'};
-    static final int VERSION = 4;
+    // RKD5 (Onda 8 Fase 2b): RKD4 (BFS-blocked nodes) + `origId` packed uint24
+    // LE (ids < 3M < 2^24, lossless) instead of int32 → −3 MB mmap footprint
+    // (less page-cache pressure under the 350 MB cgroup). Bumping magic+ver
+    // invalidates any RKD3/RKD4 .kdt so Prebuild regenerates it.
+    static final byte[] MAGIC = {'R', 'K', 'D', '5'};
+    static final int VERSION = 5;
     private static final int HEADER_BYTES = 4 + 5 * 4; // magic + ver,n,dims,stride,root
     private static final int IO_CHUNK = 8 * 1024 * 1024;
 
@@ -56,7 +58,7 @@ public final class KdTreeIO {
             writeFully(ch, hdr);
 
             writeShorts(ch, tree.pts, tree.n * KdLayout.STRIDE);
-            writeInts(ch, tree.origId, tree.n);
+            writeInts24(ch, tree.origId, tree.n);
 
             ByteBuffer meta = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
             meta.putInt(tree.topNodeCount);
@@ -76,7 +78,7 @@ public final class KdTreeIO {
             short[] pts = new short[n * KdLayout.STRIDE];
             readShorts(ch, pts, n * KdLayout.STRIDE);
             int[] origId = new int[n];
-            readInts(ch, origId, n);
+            readInts24(ch, origId, n);
 
             ByteBuffer meta = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
             readFully(ch, meta);
@@ -109,7 +111,7 @@ public final class KdTreeIO {
             ch.position(ptsOff + ptsLen);
 
             long origOff = ch.position();
-            long origLen = (long) n * 4L;
+            long origLen = (long) n * 3L; // RKD5: origId packed uint24 LE
             MappedByteBuffer origBuf = ch.map(FileChannel.MapMode.READ_ONLY, origOff, origLen);
             origBuf.order(ByteOrder.LITTLE_ENDIAN);
             ch.position(origOff + origLen);
@@ -145,7 +147,7 @@ public final class KdTreeIO {
         hdr.get(magic);
         if (magic[0] != MAGIC[0] || magic[1] != MAGIC[1]
                 || magic[2] != MAGIC[2] || magic[3] != MAGIC[3])
-            throw new IOException("bad magic (expected RKD4)");
+            throw new IOException("bad magic (expected RKD5)");
         int ver = hdr.getInt();
         int n = hdr.getInt();
         int dims = hdr.getInt();
@@ -225,6 +227,43 @@ public final class KdTreeIO {
             readFully(ch, buf);
             buf.flip();
             buf.asIntBuffer().get(arr, off, len);
+            off += len;
+        }
+    }
+
+    /** RKD5: write {@code arr[0..total)} as packed uint24 LE (values < 2^24). */
+    private static void writeInts24(FileChannel ch, int[] arr, int total) throws IOException {
+        int elemsPerChunk = IO_CHUNK / 3;
+        ByteBuffer buf = ByteBuffer.allocate(Math.min(Math.max(total, 1), elemsPerChunk) * 3);
+        int off = 0;
+        while (off < total) {
+            int len = Math.min(elemsPerChunk, total - off);
+            buf.clear();
+            for (int i = 0; i < len; i++) {
+                int v = arr[off + i];
+                buf.put((byte) v).put((byte) (v >>> 8)).put((byte) (v >>> 16));
+            }
+            buf.flip();
+            writeFully(ch, buf);
+            off += len;
+        }
+    }
+
+    /** RKD5: read {@code total} packed uint24 LE into {@code arr}. */
+    private static void readInts24(FileChannel ch, int[] arr, int total) throws IOException {
+        int elemsPerChunk = IO_CHUNK / 3;
+        ByteBuffer buf = ByteBuffer.allocate(Math.min(Math.max(total, 1), elemsPerChunk) * 3);
+        int off = 0;
+        while (off < total) {
+            int len = Math.min(elemsPerChunk, total - off);
+            buf.clear();
+            buf.limit(len * 3);
+            readFully(ch, buf);
+            buf.flip();
+            for (int i = 0; i < len; i++) {
+                int b0 = buf.get() & 0xFF, b1 = buf.get() & 0xFF, b2 = buf.get() & 0xFF;
+                arr[off + i] = b0 | (b1 << 8) | (b2 << 16);
+            }
             off += len;
         }
     }
