@@ -1,3 +1,8 @@
+### Onda 9 — Rig calibrado LOCAL (CPU-throttle p/ preditor local→Mac Mini).
+### Override de docker-compose; NUNCA commitar/NUNCA na submission (poluiria
+### o artefato oficial com cpus minúsculos). Apenas dev local.
+docker-compose.calib.yml
+
 ### Onda 5 PGO — binário instrumentado intermediário (descartável, ~57MB).
 ### Gerado por Dockerfile.instr (--target export); regerável. Não versionar.
 ### O profile resultante (api/default.iprof) ESSE sim é versionado.
