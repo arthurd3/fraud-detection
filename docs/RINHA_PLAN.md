@@ -1173,6 +1173,67 @@ Cada onda é uma **mini-aula**. Pré-requisitos linkam para `CONCEITOS.md`. Risc
 
 ---
 
+### 9.7 Onda 7 — Corrida de acurácia exata (reabre o projeto p/ o topo do ranking) 🔴
+
+> ✅ **Nota 2026‑05‑18 — o projeto REABRE para o TOPO DO RANKING.** As notas
+> §9.5/§9.6 acima continuam **verdadeiras e válidas**: o projeto **fechou
+> tecnicamente na Onda 5** (Native + PGO) e está **válido para submissão**
+> (`:onda5` é artefato de fechamento; Onda 6 = polish opcional, já validado).
+> Esta nota **não as apaga** — ela é **aditiva**. O que a Onda 7 reconhece
+> honestamente: "válido para submissão" **≠** "competitivo no topo do
+> ranking". O `final_score` atual é **~4393** (Onda 5/4b: 4393,85), e a
+> análise do gate D mostra que **p99 já está no teto** (`p99_score` 3000, p99
+> 0,59 ms ≤ 1 ms — não há mais ponto a ganhar em latência). **100 % do gap
+> para o topo é ACURÁCIA de detecção**: o k6 oficial mediu **E = FP·1 +
+> FN·3** com **FP=61, FN=103 ⇒ E = 61 + 309 = 370** (TP=23934, TN=29960). Os
+> líderes do ranking fazem **6000,00**, o que exige **E ≈ 0** (zero
+> divergência vs o ground truth). A causa‑raiz: nossa pipeline produção é
+> **int8 quantizado + HNSW aproximado**, que **diverge** do ground truth
+> exato (kNN brute‑force sobre `float` round4) — recall@5 96,89 % /
+> approved‑agree 99,90 % é ótimo para "válido", insuficiente para "topo".
+>
+> ✅ **Onda 7 = estratégia B (híbrido exato), abordagem B3.** Escolhida via
+> `AskUserQuestion`. **Ground truth (verbatim, `data-generator/main.c`):** kNN
+> **k=5**, distância **euclidiana ao quadrado**, **brute‑exato** sobre as refs
+> em **`float` round4**; `approved = (fraud_n / 5) < 0.6` (fraude se **≥3 de
+> 5** vizinhos são fraude); desempate pelo **menor índice**. A normalização de
+> features é **byte‑idêntica ao nosso parser** (`FraudRequestParser`) — já
+> validado em ondas anteriores. **Insight‑chave:** **`int16 ×10000`
+> representa `round4` EXATAMENTE (lossless)** ⇒ **E = 0 é teoricamente
+> alcançável**; o **único risco** é manter **p99 ≤ 1 ms** em hardware fraco
+> (Mac Mini 2014). **B3** (escolhida): índice `int16 ×10000` lossless vs o
+> `round4` do ground truth + **rerank exato em `double`** (idêntico ao
+> `data-generator/main.c`) sobre um **pool HNSW com `ef` alto** +
+> **escalonamento por ambiguidade** {2,3} / por margem (quando a decisão
+> está perto da fronteira `fraud_n/5 < 0.6`, alargar o pool / reranquear
+> mais candidatos). Alvo **honesto ~5900–6000** (não garante 6000,00 exato:
+> o teórico é E=0, mas p99 em HW fraco é o risco real).
+>
+> **Gates da Onda 7:**
+> - **G1 — k6 oficial:** `final_score` **≥ ~5900** (alvo **6000**), **p99 ≤
+>   1 ms** (não regredir o teto já conquistado).
+> - **G2 — 0 divergência:** vs `expected_*` (ground truth) nos **54.100**
+>   casos do dataset oficial — **0/54.100**.
+> - **G3 — prova de exatidão:** demonstrar que `int16 ×10000` é lossless vs
+>   `round4` e que o rerank `double` reproduz `data-generator/main.c` bit a
+>   bit (incl. desempate por menor índice).
+> - **G4 — p99 + cgroup:** p99 ≤ 1 ms sob o cgroup duro de 350 MB com o
+>   dataset crescido (refs `int16`: **51 → ~84 MB**), sem `OOMKilled`.
+> - **G5 — anti‑overfit:** a estratégia generaliza (não é tuning sobre o
+>   conjunto de teste; vale em amostra independente).
+>
+> **Status = spec + tutorial PRONTOS, implementação à mão PENDENTE** (não
+> implementada — só design). Spec:
+> `docs/superpowers/specs/2026-05-18-onda7-exact-accuracy-design.md` (commit
+> `3a3cf01`); tutorial: `docs/TUTORIAL_EXACT.md`. Driven‑by‑tutorial, igual
+> às ondas anteriores: o autor implementa à mão **ou** delega ao Claude
+> (como nas Ondas 5/6); Claude valida os gates G1–G5 quando o ambiente
+> estiver pronto. **Os demais itens da §9.6** (grid‑search M/ef, `sendfile`,
+> prefetch mmap, auditoria NIO) **seguem opcionais e não especificados** —
+> a Onda 7 é ortogonal a eles.
+
+---
+
 ## 10. Métricas e checkpoints
 
 ### 10.1 Por onda — métricas obrigatórias
@@ -1537,6 +1598,7 @@ Termos técnicos usados no plano. Para tutorial completo de cada conceito, ver `
 | 2026-05-18 | Builder = **Oracle GraalVM 21** (GFTC, tem PGO) — não Mandrel/CE | "Mandrel + PGO" era contraditório (PGO é Oracle‑only); GFTC é grátis em produção | ✅ Aplicado e validado (Onda 5) — ver §5.2 nota |
 | 2026-05-18 | **Remover** `sqDistI8` SIMD (+ testes `DistEquivI8`/`BenchSearch`) | Campos `static VectorSpecies` quebram o link do Native Image; código morto desde Onda 2b (0 callers, 3,8× mais lento) | ✅ Removido (Onda 5); `sqDistI8Scalar` byte‑idêntico ⇒ comportamento inalterado (Gate B) |
 | 2026-05-18 | **Onda 5 CONCLUÍDA + VALIDADA** — 4 gates verdes on‑device | Native AOT + PGO: sem warmup, `final_score` 4393,85 @ p99 0,59 ms, `http_errors` 0, sem `OOMKilled` | ✅ **Projeto fecha tecnicamente na Onda 5** (Onda 6 = opcional). `docker push`/`git push`/PR = ações pendentes do autor |
+| 2026-05-18 | **Onda 7 — estratégia B / abordagem B3** (corrida de acurácia exata) | `final_score` ~4393 com p99 já no teto ⇒ 100 % do gap p/ o topo é acurácia (E=370: FP=61/FN=103); `int16 ×10000` é lossless vs `round4` ⇒ E=0 teórico | ⏳ **Reabre o projeto p/ o topo do ranking** (não invalida o fechamento Onda 5 / "válido p/ submissão"). Spec+tutorial prontos (`3a3cf01`); impl. à mão pendente |
 
 ### B. Scores por onda
 
@@ -1544,6 +1606,7 @@ Termos técnicos usados no plano. Para tutorial completo de cada conceito, ver `
 |---|---|---|---|---|---|---|---|
 | 4b | 2026-05-18 | — | — | — | pico 103 MiB / 350 | 3611–4394 | HotSpot conteinerizado, HAProxy `mode tcp` + 2 inst.; live‑daemon |
 | **5** | **2026-05-18** | — | — | **0,59 ms** | sem `OOMKilled` (cgroup 350 MB; `docker stats` ~26,6 MiB/inst) | **4393,85** | ✅ Native AOT 12 MB + PGO, **sem warmup**, `http_errors` 0; iguala melhor run 4b. `sqDistI8` SIMD removido (código morto, quebrava o link). **Fecha o projeto** |
+| **7** | _(alvo)_ | — | — | **≤ 1 ms** _(teto a manter)_ | dataset refs `int16` 51→~84 MB; cgroup 350 MB | **alvo ~5900–6000** | ⏳ **Reabre p/ o topo do ranking.** B3: `int16 ×10000` lossless vs `round4` + rerank exato `double` (= `data-generator/main.c`) + escalonamento por ambiguidade. E=370→0 (FP=61/FN=103). Spec+tutorial prontos (`3a3cf01`); impl. à mão pendente |
 
 ### C. Notas qualitativas
 
