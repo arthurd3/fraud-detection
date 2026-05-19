@@ -34,7 +34,15 @@ public final class KdTree {
     public static final int BBF_MAX_DEPTH = 18;
     public static final int PRIME_FANOUT_DEPTH = 5;
     public static final int PRIME_FANOUT_COUNT = 1 << PRIME_FANOUT_DEPTH; // 32
-    public static final int PRIME_PLUNGE_CAP = 4;
+    /**
+     * Onda 9 Passo 2 (2026-05-19): sweep {0,1,2,4,8,12,16,24,32} sob replay
+     * determinístico revelou que o atual jvmoonshot=4 era SUPER-investimento
+     * em prime: bbf/descend não dependem da tightness adicional dos plunges
+     * (122/163 idênticos p/ plungeCap 0..4) ⇒ plunges = trabalho perdido.
+     * plungeCap=0 (só o fan-out depth-5 alimenta o BBF) ⇒ prime 103→63,
+     * visits totais 389→349 (−10,3%), G2 ExactAgree 0-div PASS (E=0 prova).
+     */
+    public static final int PRIME_PLUNGE_CAP = 0;
     public static final int BBF_HEAP_CAP = KdScratch.BBF_HEAP_CAP; // 256
     public static final int BBF_POOL_CAP = KdScratch.BBF_POOL_CAP; // 256
 
