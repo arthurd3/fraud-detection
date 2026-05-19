@@ -1,3 +1,17 @@
+> ⚠️ **SUPERSEDED 2026-05-19 → "Onda 7 v2: KD-tree + BBF exato".** A
+> abordagem **B3** abaixo (int16 lossless + **HNSW aproximado** + rerank de
+> pool + **escalonamento** heurístico) foi **substituída** por uma busca
+> **EXATA por construção**: **KD-tree balanceado + branch-and-bound (BBF)**,
+> portada de `jvmoonshot-xxvi-main` (entry Rinha-2026 que prova busca exata
+> sub-ms no mesmo HW). Motivo: B3 **não garante E=0** (escalonamento é
+> heurístico → provável ~5900). Em v2 o E=0 vira **estrutural** (KD-tree
+> exato + rerank `double` idêntico ao `data-generator/main.c` + tie-break
+> por menor índice original), **sem HNSW e sem escalonamento**. A **prova
+> int16 ×10000 lossless vs round4** e a análise de `round4`/empate-do-C
+> deste documento **permanecem válidas e são reaproveitadas**. Histórico B3
+> preservado abaixo (padrão de nota datada do projeto). **Spec vigente:**
+> [`2026-05-19-onda7v2-kdtree-bbf-design.md`](2026-05-19-onda7v2-kdtree-bbf-design.md).
+
 # Spec — Onda 7: acurácia exata (int16 lossless + rerank exato + escalonamento) → mirar ~6000
 
 > Brainstorming → design travado → tutorial. Projeto **tutorial-driven**: o
