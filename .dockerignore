@@ -3,6 +3,8 @@
 **/*.json.gz
 **/hnsw.rbh1.golden
 **/example-references.json
+**/references.bin
+**/hnsw.bin
 docs
 *.md
 .claude

@@ -6,12 +6,14 @@ COPY api/ ./api/
 # o profile `native` consome via --pgo=default.iprof.
 RUN cd api && ./mvnw -q -Pnative -DskipTests package      # => target/api (ELF)
 
-# ---- runtime: distroless glibc + binário + binários RBH2 baked (sem JVM) ----
+# ---- runtime: distroless glibc + binário + KD-tree RKD3 baked (sem JVM) ----
+# Onda 7 v2: produção carrega só references.kdt (KD-tree exato). Binários
+# legados int8/HNSW (references.bin/hnsw.bin) saíram do runtime — imagem e
+# cgroup menores (~166 MB vs ~365 MB).
 FROM gcr.io/distroless/base-debian12 AS runtime
 WORKDIR /app
 COPY --from=builder /src/api/target/api /app/api
-COPY api/src/main/resources/references.bin /data/references.bin
-COPY api/src/main/resources/hnsw.bin       /data/hnsw.bin
+COPY api/src/main/resources/references.kdt /data/references.kdt
 ENV DATA_PATH=/data
 EXPOSE 9999
 ENTRYPOINT ["/app/api","9999"]
