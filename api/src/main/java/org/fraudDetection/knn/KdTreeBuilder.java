@@ -53,11 +53,11 @@ public final class KdTreeBuilder {
         if (rootIdx != 0) throw new IllegalStateException("root not at 0: " + rootIdx);
         if (nextIdx[0] != n) throw new IllegalStateException("node count mismatch");
 
-        // ── Onda 8 Fase 2: relayout pré-ordem-DFS → BFS-blocked (vEB-like) ───────────
+        // ── Onda 8 Fase 2/2c: relayout DFS-global → blocked, pré-ordem intra-bloco ──
         // PERMUTAÇÃO PURA dos índices de nó: mesma árvore/splits/fraud/origId,
         // só muda treeIdx + ordem física. determinismo intacto (não toca
         // buildRecursive/Random(42L)). E=0 por construção; ExactAgree 0-div prova.
-        // Bloco = topo de BLOCK_HEIGHT níveis contíguos em ordem BFS
+        // Bloco = topo de BLOCK_HEIGHT níveis contíguos em PRÉ-ORDEM DFS
         // (≤2^BH-1=63 nós ≈ ≤2520 B ≤ 1 página 4 KB) ⇒ caminho raiz→folha cruza
         // ~prof/BH blocos em vez de tocar páginas espalhadas pelos 120 MB.
         {
@@ -237,14 +237,15 @@ public final class KdTreeBuilder {
         }
     }
 
-    // ── Onda 8 Fase 2: BFS-blocked relayout (pure node-index permutation) ─────────────
+    // ── Onda 8 Fase 2/2c: blocked relayout, pre-order intra-block (pure perm) ────────
 
     /**
-     * BFS-blocked relayout block height: 6 ⇒ ≤2^6-1=63 nodes/block ≈ ≤2520 B
+     * Blocked-relayout block height: 6 ⇒ ≤2^6-1=63 nodes/block ≈ ≤2520 B
      * ≤ 1 page (4 KB). Fase-1 grid-search (BH 4..12, deterministic replay,
-     * 2026-05-19) CONFIRMED 6 is optimal — distinctPages mean: BH6=31 (best),
-     * 7=34, 5=38, 4/8=35, 12=49. Kept a plain constant (no runtime knob):
-     * simplicity wins, zero measured gain elsewhere.
+     * 2026-05-19, BFS-intra-block variant) found 6 optimal (distinctPages mean
+     * BH6=31, 7=34, 5=38, 4/8=35, 12=49); Fase-2c switched intra-block order
+     * BFS→pre-order DFS at BH=6 (pages 31→30, lines 354→311, E=0). Plain
+     * constant, no runtime knob — simplicity wins, zero gain measured elsewhere.
      */
     static final int BLOCK_HEIGHT = 6;
 
@@ -261,9 +262,10 @@ public final class KdTreeBuilder {
     }
 
     /**
-     * Renumber nodes from pre-order DFS into BFS-blocked order: each block is
-     * the top {@code BLOCK_HEIGHT} levels of a subtree laid out contiguously in
-     * BFS order; the ≤2^BH children hanging off the block bottom each start a
+     * Renumber nodes from global pre-order DFS into a BLOCKED layout: each
+     * block is the top {@code BLOCK_HEIGHT} levels of a subtree laid out
+     * contiguously in block-local PRE-ORDER DFS (Fase-2c; was BFS — pre-order
+     * keeps the page win and improves cache-line locality); ≤2^BH children
      * new block (recursively, via an explicit work queue). Whole-tree root
      * (old idx 0) → new idx 0. Pure permutation: features/fraud/origId copied
      * verbatim, child links remapped through {@code newIdx} — tree, splits and
@@ -287,18 +289,23 @@ public final class KdTreeBuilder {
 
         while (bqHead < bqTail) {
             int r = blockQ[bqHead++];
-            int lh = 0, lt = 0;
-            lq[lt] = r; ld[lt] = 0; lt++;
-            while (lh < lt) {
-                int node = lq[lh]; int dep = ld[lh]; lh++;
+            int sp = 0;
+            lq[sp] = r; ld[sp] = 0; sp++;
+            while (sp > 0) {                       // pre-order DFS within block
+                sp--;
+                int node = lq[sp]; int dep = ld[sp];
                 if (node < 0) continue;
                 newIdx[node] = next++;
                 int lad = leftAndDimOf(pts, node);
                 int left = KdLayout.unpackLeft(lad);
                 int right = rightOf(pts, node);
                 if (dep + 1 < BLOCK_HEIGHT) {
-                    if (left  >= 0) { lq[lt] = left;  ld[lt] = dep + 1; lt++; }
-                    if (right >= 0) { lq[lt] = right; ld[lt] = dep + 1; lt++; }
+                    // push right then left ⇒ left pops first (pre-order: node,
+                    // left-subtree, right-subtree) ⇒ a root→leaf descent is
+                    // contiguous within the block (better cache-line locality
+                    // than BFS, same page win — both ≤1 page/block).
+                    if (right >= 0) { lq[sp] = right; ld[sp] = dep + 1; sp++; }
+                    if (left  >= 0) { lq[sp] = left;  ld[sp] = dep + 1; sp++; }
                 } else {
                     if (left  >= 0) blockQ[bqTail++] = left;
                     if (right >= 0) blockQ[bqTail++] = right;
