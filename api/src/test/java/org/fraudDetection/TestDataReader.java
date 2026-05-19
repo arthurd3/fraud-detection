@@ -13,21 +13,35 @@ final class TestDataReader {
         pos = all.indexOf("\"entries\"");
     }
 
-    static final class Entry { String body; boolean expected; }
+    static final class Entry { String body; boolean expected; double expectedFraudScore; }
 
     Entry next() {
         int r = all.indexOf("\"request\"", pos);
         if (r < 0) return null;
         int objStart = all.indexOf('{', r);
-        int objEnd   = matchBrace(all, objStart);   
+        int objEnd   = matchBrace(all, objStart);
         int ea       = all.indexOf("\"expected_approved\"", objEnd);
         int colon    = all.indexOf(':', ea);
         boolean exp  = all.regionMatches(true, firstNonWs(all, colon + 1), "true", 0, 4);
+        // Onda 7 v2 (additive): parse "expected_fraud_score" (∈ {0,0.2,0.4,0.6,0.8,1}).
+        int fs       = all.indexOf("\"expected_fraud_score\"", objEnd);
+        int fsColon  = all.indexOf(':', fs);
+        double score = parseNum(all, firstNonWs(all, fsColon + 1));
         Entry e = new Entry();
         e.body     = all.substring(objStart, objEnd + 1);
         e.expected = exp;
+        e.expectedFraudScore = score;
         pos = objEnd + 1;
         return e;
+    }
+
+    private static double parseNum(String s, int i) {
+        int j = i;
+        while (j < s.length()) {
+            char c = s.charAt(j);
+            if ((c >= '0' && c <= '9') || c == '.' || c == '-') j++; else break;
+        }
+        return Double.parseDouble(s.substring(i, j));
     }
 
     private static int firstNonWs(String s, int i) {
