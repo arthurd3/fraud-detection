@@ -16,18 +16,26 @@ final class KdScratch {
     /** Permuted query in i16 units; lanes 14..19 stay zero. */
     final short[] permutedQueryI16 = new short[KdLayout.STRIDE];
 
-    final int[] fanOutBuf = new int[KdTree.PRIME_FANOUT_COUNT];
-    int fanOutCount;
+    // Onda 11 removed fanOutBuf/fanOutCount: the beam-of-2 prime tracks state in
+    // local variables (best far child + delta²), so no per-query staging buffer
+    // is needed. Saves 128 B per scratch and one less field to clear.
     int visits;
     int vPrime, vBBF, vDescend; // Onda 9: breakdown de visits (prime / BBF / descend-fallback)
 
-    // Onda 9 achado (sweep 256..8192 = ZERO mudança; watermarks medidos
-    // maxHeap≈165 / maxPool≈104 « 256 ⇒ os caps NUNCA são atingidos). O
-    // fallback recursivo `descend` (~42% das visitas) é disparado pelo CORTE
-    // DE PROFUNDIDADE (BBF_MAX_DEPTH/TOP_BBOX_DEPTH=18), não pelos caps —
-    // logo mexer nos caps é no-op. Constante simples (não tunar).
-    static final int BBF_HEAP_CAP = 256;
-    static final int BBF_POOL_CAP = 256;
+    // Onda 11 Phase B v2 (2026-05-20): grow caps 256→1024 to support
+    // BBF_MAX_DEPTH 18→22, which routes the ~167 deep visits (formerly the
+    // recursive `descend` fallback) through the BBF best-first heap. Caps were
+    // sized for depth ≤18 (max observed 165 heap / 96 pool); pushing depths
+    // 19..22 onto the heap raises peak occupancy, so caps must grow.
+    //
+    // Memory: heap 4×int×1024 = 16 KB (was 4 KB); pool 1024×DIMS×int = 56 KB
+    // (was 14 KB). Total scratch ≈ 80 KB (was 30 KB) — still well within L2.
+    //
+    // Onda 9 finding (now superseded for the caps but kept for context): the
+    // 256 caps were never hit because the depth gate at BBF_MAX_DEPTH=18 cut
+    // first; Phase B v2 lifts that gate.
+    static final int BBF_HEAP_CAP = 1024;
+    static final int BBF_POOL_CAP = 1024;
     final int[] bbfTreeIdx = new int[BBF_HEAP_CAP];
     final int[] bbfSlabSum = new int[BBF_HEAP_CAP];
     final int[] bbfDepth = new int[BBF_HEAP_CAP];

@@ -31,20 +31,34 @@ public final class KdTree {
     static final int LANE_FRAUD = KdLayout.LANE_FRAUD;       // 18
 
     public static final int TOP_BBOX_DEPTH = 18;
-    public static final int BBF_MAX_DEPTH = 18;
-    public static final int PRIME_FANOUT_DEPTH = 5;
-    public static final int PRIME_FANOUT_COUNT = 1 << PRIME_FANOUT_DEPTH; // 32
     /**
-     * Onda 9 Passo 2 (2026-05-19): sweep {0,1,2,4,8,12,16,24,32} sob replay
-     * determinístico revelou que o atual jvmoonshot=4 era SUPER-investimento
-     * em prime: bbf/descend não dependem da tightness adicional dos plunges
-     * (122/163 idênticos p/ plungeCap 0..4) ⇒ plunges = trabalho perdido.
-     * plungeCap=0 (só o fan-out depth-5 alimenta o BBF) ⇒ prime 103→63,
-     * visits totais 389→349 (−10,3%), G2 ExactAgree 0-div PASS (E=0 prova).
+     * Onda 11 Phase B v2 (2026-05-20): raised 18→22 (≈ max tree depth for n=3M).
+     * Previously depth-19..22 nodes were routed to the recursive {@code descend}
+     * fallback (~167 visits / query, 42% of total) and processed in DFS-near-then-
+     * far order per subtree. By extending the BBF best-first heap to handle the
+     * full tree depth, those same deep nodes are popped in slabSum-ascending
+     * order globally — earlier pops shrink {@code thresholdSum} sooner, so later
+     * pops can be pruned by the updated threshold before paying their distSumI16.
+     * E=0 unchanged: the pruning test (slabSum &gt; threshSum, optional bbox check
+     * at depth ≤ TOP_BBOX_DEPTH=18) is sound under any visit order. {@link KdScratch}
+     * BBF_HEAP_CAP / BBF_POOL_CAP grown to 1024 to absorb the deeper enqueues.
      */
-    public static final int PRIME_PLUNGE_CAP = 0;
-    public static final int BBF_HEAP_CAP = KdScratch.BBF_HEAP_CAP; // 256
-    public static final int BBF_POOL_CAP = KdScratch.BBF_POOL_CAP; // 256
+    public static final int BBF_MAX_DEPTH = 22;
+    /**
+     * Onda 11 — Beam-of-2 greedy pre-pass replaces the legacy depth-5 exhaustive
+     * fan-out (PRIME_FANOUT_DEPTH=5, PRIME_FANOUT_COUNT=32) plus the disabled
+     * PRIME_PLUNGE_CAP=0 plunge stage. The fan-out visited 63 internal nodes at
+     * depths 0..5 and staged 32 leaf candidates that were then never plunged
+     * (Onda 9 Passo 2 sweep 0..32 proved plunges did not tighten the BBF entry
+     * bound — bbf/descend were identical 122/163 at every cap). The untested
+     * variant: replace the 32-fan-out entirely with two root→leaf greedy
+     * descents (~44 visits, two true depth-22 leaves). E=0 by construction:
+     * prime only writes to results/pool via considerNode, so the i16-5th double
+     * bound argument (see poolRecord doc) is unchanged.
+     */
+    public static final int PRIME_BEAM_WIDTH = 2;
+    public static final int BBF_HEAP_CAP = KdScratch.BBF_HEAP_CAP; // 1024 (Phase B v2)
+    public static final int BBF_POOL_CAP = KdScratch.BBF_POOL_CAP; // 1024 (Phase B v2)
 
     final int n;
 
@@ -365,44 +379,63 @@ public final class KdTree {
         }
     }
 
-    // ── Prime (fan-out + plunge to pre-fill top-K) ───────────────────────────────────
+    // ── Prime (Onda 11 beam-of-2 greedy descent) ─────────────────────────────────────
 
+    /**
+     * Pre-fill the top-K and pool with two cheap root→leaf greedy descents.
+     *
+     * <p>Descent #1 walks from the root following the {@code near} child at
+     * every split (the side of the splitting plane that contains the query),
+     * evaluating {@code distSumI16} and {@code considerNode} at every node.
+     * In parallel, it tracks the single best (smallest {@code delta²}) far
+     * child seen along the path — {@code delta²} is the L² lower bound on
+     * the L² distance from query to any point in that far subtree, so the
+     * smallest one is the most promising start for the second descent.
+     *
+     * <p>Descent #2 replays the same near-only greedy walk from that best far
+     * child. Total visits ≈ {@code 2·depth} (≈ 44 for the balanced 3 M-node
+     * tree of depth ~22), replacing the 63-visit exhaustive fan-out at
+     * depths 0..5 of the legacy {@code primeRecurse}.
+     *
+     * <p>E=0 by construction: every visit feeds the same {@code considerNode}
+     * path that the legacy prime used; pruning aggression in subsequent
+     * BBF/descend depends only on {@code results.peekSum()}, which monotone-
+     * decreases regardless of the prime variant. The i16-5th double-bound
+     * argument (see {@link #poolRecord}) is unchanged. {@code ExactAgree}
+     * over 54,100 queries is the empirical proof.
+     */
     private void prime(KdScratch s, int k) {
-        s.fanOutCount = 0;
-        primeRecurse(0, s, k, 0);
-        primeSelectAndPlunge(s, k);
-    }
+        int bestFar = -1;
+        int bestFarDeltaSq = Integer.MAX_VALUE;
+        int treeIdx = 0;
 
-    private void primeRecurse(int treeIdx, KdScratch s, int k, int depth) {
-        if (treeIdx < 0) return;
-        s.visits++; s.vPrime++;
-        int dist = distSumI16(s, treeIdx);
-        considerNode(s, treeIdx, dist, s.results.size() >= k, k);
-        int leftAndDim = leftAndDimAt(treeIdx);
-        int leftIdx = unpackLeft(leftAndDim);
-        int rightIdx = rightAt(treeIdx);
-        if (depth < PRIME_FANOUT_DEPTH) {
-            primeRecurse(leftIdx, s, k, depth + 1);
-            primeRecurse(rightIdx, s, k, depth + 1);
-        } else {
+        // Descent #1 — from root, always follow near; remember the best far.
+        while (treeIdx >= 0) {
+            s.visits++; s.vPrime++;
+            int dist = distSumI16(s, treeIdx);
+            considerNode(s, treeIdx, dist, s.results.size() >= k, k);
+            int leftAndDim = leftAndDimAt(treeIdx);
             int splitDim = unpackDim(leftAndDim);
+            int leftIdx = unpackLeft(leftAndDim);
+            int rightIdx = rightAt(treeIdx);
             int delta = s.permutedQueryI16[splitDim] - ptI16(treeIdx, splitDim);
-            int near = (delta < 0) ? leftIdx : rightIdx;
-            if (near >= 0 && s.fanOutCount < PRIME_FANOUT_COUNT) {
-                s.fanOutBuf[s.fanOutCount++] = near;
+            int near, far;
+            if (delta < 0) { near = leftIdx; far = rightIdx; }
+            else { near = rightIdx; far = leftIdx; }
+            if (far >= 0) {
+                int deltaSq = delta * delta;
+                if (deltaSq < bestFarDeltaSq) {
+                    bestFarDeltaSq = deltaSq;
+                    bestFar = far;
+                }
             }
+            treeIdx = near;
         }
-    }
 
-    private void primeSelectAndPlunge(KdScratch s, int k) {
-        int count = s.fanOutCount;
-        if (count == 0) return;
-        int[] buf = s.fanOutBuf;
-        int m = Math.min(count, PRIME_PLUNGE_CAP);
-        for (int i = 0; i < m; i++) plunge(buf[i], s, k);
-    }
-
-    private void plunge(int treeIdx, KdScratch s, int k) {
+        // Descent #2 — from the best far child, same near-only descent. Skipped
+        // if the tree was so small that descent #1 saw no far children.
+        if (bestFar < 0) return;
+        treeIdx = bestFar;
         while (treeIdx >= 0) {
             s.visits++; s.vPrime++;
             int dist = distSumI16(s, treeIdx);
@@ -517,7 +550,8 @@ public final class KdTree {
             // Onda 10 Step 2 — visit-budget cap (relaxação). C2/GraalVM elimina o branch
             // inteiro quando MAX_VISITS_ENABLED=false (static final do env vazio). Quando
             // ativo, retorna o top-5 acumulado até aqui (pode estar sub-ótimo). Apenas o
-            // BBF tem cap; primeRecurse (≤32 visits) + descend (≤depth ~22) são bounded.
+            // BBF tem cap; the Onda 11 beam-of-2 prime (≤44 visits) + descend (≤depth ~22)
+            // are bounded by construction so the cap never short-circuits them.
             if (MAX_VISITS_ENABLED && s.visits >= MAX_VISITS_BUDGET) return;
             int dist = distSumI16(s, treeIdx);
             if (!full) {
