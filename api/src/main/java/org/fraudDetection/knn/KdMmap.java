@@ -33,4 +33,25 @@ public final class KdMmap {
         for (int i = 0; i < end; i += PAGE_BYTES) sink ^= region.get(i);
         return sink;
     }
+
+    /**
+     * Onda 12 Phase D — best-effort MADV_WILLNEED + force-load of the entire
+     * mapped region via the standard {@link MappedByteBuffer#load()} call.
+     *
+     * <p>The companion {@link #prewarm} only faults pages in once; under the
+     * 159 MB cgroup memory limit (and the 163 MB references.kdt) the kernel
+     * may evict pages of the dataset to reclaim memory for other containers
+     * on the host. {@code load()} issues madvise(MADV_WILLNEED) which both
+     * (a) reads the mapping into physical memory and (b) hints the page
+     * cache to keep those pages resident. Costs ≈ 0.3 s at boot (sequential
+     * I/O over 163 MB), nothing on the hot path. /ready does not return 200
+     * until after this completes, so k6 starts against a warm cache.
+     *
+     * <p>Standard NIO API (Java 21+), no FFM/Unsafe — safe under GraalVM
+     * native-image.
+     */
+    public static void loadIntoMemory(MappedByteBuffer region) {
+        if (region == null) return;
+        region.load();
+    }
 }

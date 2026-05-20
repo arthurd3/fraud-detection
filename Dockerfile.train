@@ -1,0 +1,17 @@
+# Onda 12 Phase A — runnable instrumented image. Same as Dockerfile but uses
+# the native-instrument Maven profile (--pgo-instrument, -march=compatibility).
+# Run it under the calib rig with k6, then docker cp /app/default.iprof out
+# to api/default.iprof and rebuild the final Dockerfile for x86-64-v3 + PGO.
+FROM container-registry.oracle.com/graalvm/native-image:21 AS builder
+WORKDIR /src
+COPY api/ ./api/
+RUN cd api && ./mvnw -q -Pnative-instrument -DskipTests package
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends zlib1g && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /src/api/target/api /app/api
+COPY api/src/main/resources/references.kdt /data/references.kdt
+ENV DATA_PATH=/data
+EXPOSE 9999
+ENTRYPOINT ["/app/api","9999"]

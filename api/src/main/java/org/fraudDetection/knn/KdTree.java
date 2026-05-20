@@ -173,13 +173,22 @@ public final class KdTree {
 
     public int size() { return n; }
 
-    /** Best-effort mmap hints + page prewarm at boot (NO-OP madvise on Java 21). */
+    /**
+     * Best-effort mmap hints + page prewarm at boot. NO-OP madvise on Java 21,
+     * but Onda 12 Phase D adds {@link KdMmap#loadIntoMemory} which uses the
+     * standard NIO {@code MappedByteBuffer.load()} for MADV_WILLNEED + force
+     * page-in; that keeps the index resident under the 159 MB cgroup pressure.
+     */
     public void applyMmapHints() {
         if (ptsBuf != null) {
             KdMmap.madviseBestEffort(ptsBuf, 0);
             KdMmap.prewarm(ptsBuf);
+            KdMmap.loadIntoMemory(ptsBuf);
         }
-        if (origBuf != null) KdMmap.prewarm(origBuf);
+        if (origBuf != null) {
+            KdMmap.prewarm(origBuf);
+            KdMmap.loadIntoMemory(origBuf);
+        }
     }
 
     // Gate accessors (ExactAgree).

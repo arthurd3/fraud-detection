@@ -2,6 +2,7 @@ package org.fraudDetection.server;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.StandardSocketOptions;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
@@ -60,6 +61,13 @@ public class NioServer {
         SocketChannel socketChannel = serverChannel.accept();
         if (socketChannel == null) return;   // defesa contra spurious wakeup do selector
         socketChannel.configureBlocking(false);
+
+        // Onda 12 Phase C — TCP_NODELAY explicit on accepted sockets. Java NIO
+        // does not disable Nagle's algorithm by default; modern Linux usually
+        // auto-disables it for small writes, but explicit guards the worst-case
+        // ~200 µs delay on the canned-response write path that follows every
+        // request. Cost: zero (one setsockopt() per accept, not per request).
+        socketChannel.setOption(StandardSocketOptions.TCP_NODELAY, Boolean.TRUE);
 
         // Connection State via TCP CONNECTION - REUSED FOR ALL CONN REQUESTS
         ConnectionState state = new ConnectionState();
