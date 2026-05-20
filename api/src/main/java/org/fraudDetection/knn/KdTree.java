@@ -79,6 +79,42 @@ public final class KdTree {
     public static final boolean INSTR = Boolean.getBoolean("fd.instr");
 
     /**
+     * Onda 10 Step 2 — visit-budget cap (relaxação CONTROLADA, jvmoonshot pattern).
+     * Quando ativo, {@link #continueDfsBBF} retorna após {@code s.visits >= MAX_VISITS_BUDGET},
+     * mesmo se BBF heap ainda tem candidatos. Truncamento → top-5 atual (pode estar
+     * sub-ótimo) → algumas queries têm fraudCount errado vs ground truth.
+     *
+     * <p>{@code MAX_VISITS_ENABLED} é {@code static final} capturado no class load via env
+     * {@code KDTREE_MAX_VISITS}: ausente ou 0 ⇒ false ⇒ C2/GraalVM dead-code-elimina os
+     * checks no hot loop (custo ZERO). Presente e &gt;0 ⇒ true ⇒ branch profile gravado
+     * pelo PGO + cap aplicado.
+     *
+     * <p>{@code MAX_VISITS_BUDGET} é {@code static int} mutável (valor pode ser sweepado em
+     * runtime via {@link #setMaxVisitsBudget}); a estrutura do código já está congelada pelo
+     * {@code static final} ENABLED, então tuning é zero-rebuild.
+     *
+     * <p>Trade-off: 1 erro = -90 pts; p99 32ms → ~5-15ms quando cap corta cauda longa.
+     * Ganho líquido positivo enquanto E (erros totais) &lt; ~30 (sweet spot ~5-15 erros).
+     */
+    public static final boolean MAX_VISITS_ENABLED;
+    public static int MAX_VISITS_BUDGET;
+    static {
+        String v = System.getenv("KDTREE_MAX_VISITS");
+        int parsed = Integer.MAX_VALUE;
+        boolean enabled = false;
+        if (v != null && !v.isEmpty()) {
+            try {
+                int n = Integer.parseInt(v);
+                if (n > 0) { parsed = n; enabled = true; }
+            } catch (NumberFormatException ignored) {}
+        }
+        MAX_VISITS_BUDGET = parsed;
+        MAX_VISITS_ENABLED = enabled;
+    }
+    /** Bench/sweep setter — só efetivo se {@link #MAX_VISITS_ENABLED} foi ligado no boot. */
+    public static void setMaxVisitsBudget(int cap) { MAX_VISITS_BUDGET = Math.max(1, cap); }
+
+    /**
      * Production load: mmap {@code references.kdt} (off-heap pts/origId) +
      * best-effort hints/prewarm. {@code Main} calls this instead of the legacy
      * MmapDataset/HnswIndex load.
@@ -224,6 +260,23 @@ public final class KdTree {
                 sum += diff * diff;
             }
         } else {
+            // Onda 10 Step 1+1b lições (2026-05-19, FALSIFIED ambas tentativas):
+            //
+            //  Step 1  — bulk-read (3×getLong + 1×getInt + shifts) com default.iprof DO :onda9
+            //            (scalar-treinado) → regressão -391 pts (4539→4148 mediana 3-trial rig).
+            //  Step 1b — mesmo bulk-read APÓS regenerar default.iprof via Dockerfile.train +
+            //            k6 oficial host (workflow §6) → ainda perde 64 pts (4350→4286).
+            //
+            //  Conclusão: PGO mismatch explicava 327 dos 391 pts iniciais, mas bulk-read perde
+            //  por motivo mais fundamental — C2/GraalVM Native auto-vetoriza o scalar loop em
+            //  AVX2 SIMD (14 i16² em ~2-4 instr.), enquanto getLong+shifts é scalar puro (~14
+            //  instr.). Confie no compilador moderno; manual unroll perde em loops puros aqui.
+            //
+            //  Recipe PGO regen (preservado p/ futuros refactors maiores): Dockerfile.train +
+            //  docker save -o ~/Desktop/.../_extract/instr-image.tar (sandbox bloqueia /tmp/);
+            //  tar -xf p/ extrair /app/api; host run com SIGINT após k6 → api/default.iprof.
+            //
+            //  Mantido scalar (este é o código byte-idêntico ao :onda9 produção).
             int byteBase = base * 2;
             for (int d = 0; d < DIMS; d++) {
                 int diff = q[d] - ptsBuf.getShort(byteBase + d * 2);
@@ -461,6 +514,11 @@ public final class KdTree {
                 }
             }
             s.visits++; s.vBBF++;
+            // Onda 10 Step 2 — visit-budget cap (relaxação). C2/GraalVM elimina o branch
+            // inteiro quando MAX_VISITS_ENABLED=false (static final do env vazio). Quando
+            // ativo, retorna o top-5 acumulado até aqui (pode estar sub-ótimo). Apenas o
+            // BBF tem cap; primeRecurse (≤32 visits) + descend (≤depth ~22) são bounded.
+            if (MAX_VISITS_ENABLED && s.visits >= MAX_VISITS_BUDGET) return;
             int dist = distSumI16(s, treeIdx);
             if (!full) {
                 if (!s.results.contains(treeIdx)) {

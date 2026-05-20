@@ -12,3 +12,7 @@ _pgo/
 ### (regra efetiva em api/.gitignore; repetida aqui por completude)
 api/src/main/resources/references.kdt
 references.kdt
+
+### Onda 10 — overrides locais para benchmark relativo no rig (gitignored).
+docker-compose.onda9.yml
+docker-compose.onda10test.yml
