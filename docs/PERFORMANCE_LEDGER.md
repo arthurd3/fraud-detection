@@ -58,6 +58,7 @@ Sorted oldest → newest. *Calib columns are MEDIAN of 3 trials.*
 | Onda 14 | (revert) | `:onda14` (deleted) | BUNDLE: parser `indexKeys` + `-H:+RemoveUnusedSymbols` + HAProxy `bufsize=4096`/`maxaccept=32`/`rcvbuf` + timeouts 1s/5s/5s + PGO regen | 4573 | 26.73ms | — | ✗ REGRESS, revert |
 | Onda 15a | (no commit) | `:onda12` | HAProxy `tune.bufsize=8192` only | 4505 | 31.3ms | — | ✗ no-op/regress in noisy calib |
 | Onda 15 | (revert) | `:onda15` (deleted) | Parser `indexKeys` single-pass ISOLATED (G2 PASS, G3 PASS, G4 unchanged) — first 1-lever discipline test | 4584 | 26.05ms | — | ✗ FALSIFIED isolated (noisy host; t2 outlier 5819/1.52 ms inconclusive) |
+| Onda 16 | (revert) | `:onda16` (deleted) | PGO regen ISOLADO contra Onda 13 source (zero Java change, only `api/default.iprof` replaced); 2nd disciplined 1-lever test | 4554 | 27.87ms | — | ✗ FALSIFIED isolated (noisy host load 4.96 / swap 13 GB; t1 outlier 4946/11.31 ms positive signal but t3 outlier 4170/67.47 ms drags median down) |
 
 ---
 
@@ -145,6 +146,7 @@ For each component: **WINNERS** (kept), **FALSIFIED** (do not repeat), **OPEN** 
 - (Onda 14) `-R:MaxHeapSize=32m` — OOM at boot; 64m is the safe anchor.
 - (Onda 14) `-H:Optimize=Performance` — not a valid GraalVM 21 keyword (expects 'b' or number; `-O3` already covers this).
 - Manual unroll (see §3.1).
+- **PGO regen vs Onda 13 compose-only changes** (Onda 16, 2026-05-21, ISOLATED). PGO regenerated using `Dockerfile.train` + host run + k6 training + SIGTERM — recipe valid (k6 instr training = 6000/0.39ms confirming correct binary), new `api/default.iprof` 4.1 MB captured. Native build `:onda16` succeeded. Calib 3 trials sob host degradado (load 4.96, swap 13 GB): t1=4946.70/11.31ms (positive signal), t2=4554.86/27.87ms, t3=4170.89/67.47ms → median **4554.86/27.87ms** = REGRESS branch (4554 < 4730). Honest: data inconclusive due to noise (spread 775 final / 5× p99); same outcome as Onda 15. **Reusable lesson**: compose-only changes (cpuset/sysctls without Java code change) do not retrain PGO into a meaningfully different profile — Onda 13's "different runtime path" hypothesis was likely overstated; PGO branch frequencies are determined by INPUT data (k6 seed=4242 deterministic), not by CPU placement or socket tunings. Don't repeat PGO regen for compose-only future waves.
 
 **OPEN**:
 - `-H:+RemoveUnusedSymbols` (in Onda 14 bundle, isolated test pending).
@@ -213,12 +215,13 @@ Calib rig is a **proxy** for Mac Mini, not a precise simulator. Variance changes
 |-----|-------|---------|---|---|---|
 | **1** | **Mac Mini preview do Onda 13 atual** (`:onda12` + cpuset+sysctls compose) | Mede a vitória já garantida pelo Onda 13 antes de qualquer mudança nova | 0 (só abrir issue rinha/test) | nulo | upstream issue |
 | ~~2~~ | ~~Parser `indexKeys` ISOLADO~~ | ~~~~ | — | — | FALSIFIED 2026-05-21 (Onda 15, ver §3.2) |
-| **2** | PGO regen ISOLADO contra Onda 13 source | Recovers ~1-2% se PGO ficou stale após cpuset (raro) | 15 min cycle | nulo | calib 3 trials |
-| **3** | HAProxy `tune.maxaccept=64` ISOLADO | Lighter throttle de accept burst (menos que 32, mais que 100) | compose-only, sem rebuild | baixo | calib 3 trials |
-| **4** | `-H:+RemoveUnusedSymbols` ISOLADO | I-cache tighter — tested in Onda 14 bundle, isolated unclear | rebuild 5-10 min | nulo | calib 3 trials |
-| **5** | `cfs_period_us=20000` ISOLADO (override calib `cpus:`) | Burst window 20 ms → smoother throttling | compose-only, complex override | médio | calib 3 trials |
-| **6** | `mlockall()` via JNI (NÃO FFM) | Lock mmap pages contra eviction sob cgroup | JNI 1 file, rebuild | baixo | calib 3 trials |
-| **7** | Profiling `perf stat` (`paranoid=1` 1 sudo) | Confirma qual componente domina cycles sob calib | 20 min cycle | nulo | perf stat -d output |
+| ~~3~~ | ~~PGO regen ISOLADO~~ | ~~~~ | — | — | FALSIFIED 2026-05-21 (Onda 16, ver §3.6) |
+| **2** | HAProxy `tune.maxaccept=64` ISOLADO | Lighter throttle de accept burst (menos que 32, mais que 100) | compose-only, sem rebuild | baixo | calib 3 trials |
+| **3** | `-H:+RemoveUnusedSymbols` ISOLADO | I-cache tighter — tested in Onda 14 bundle, isolated unclear | rebuild 5-10 min | nulo | calib 3 trials |
+| **4** | `cfs_period_us=20000` ISOLADO (override calib `cpus:`) | Burst window 20 ms → smoother throttling | compose-only, complex override | médio | calib 3 trials |
+| **5** | `mlockall()` via JNI (NÃO FFM) | Lock mmap pages contra eviction sob cgroup | JNI 1 file, rebuild | baixo | calib 3 trials |
+| **6** | Profiling `perf stat` (`paranoid=1` 1 sudo) | Confirma qual componente domina cycles sob calib | 20 min cycle | nulo | perf stat -d output |
+| **7** | Reboot host + retest Onda 13 baseline + retry Onda 15/16 sob host limpo | Maybe the falsifications were noise, not real (t1 in both showed promise) | 30 min cycle + ledger update | médio | clean calib 3 trials |
 
 ---
 
@@ -242,3 +245,4 @@ Calib rig is a **proxy** for Mac Mini, not a precise simulator. Variance changes
 
 - **2026-05-21**: criação. Documenta estado pós-Onda 14 revert. Próximo ataque sugerido = §6 lever #1 (Mac Mini preview do Onda 13).
 - **2026-05-21** (segunda edição, post-Onda 15 falsification): Onda 15 (parser `indexKeys` ISOLATED) testada disciplinadamente. G1-G4 todos PASS (semântica correta, E=0 preserved). G5 calib sob host degradado (load 12.15, swap 13 GB) deu median 4584/26.05 ms vs noisy-baseline 4615/24.24 — essentially no-op (strict acceptance criterion 4730 violado). Revert per protocolo. Lever §6.2 (parser indexKeys) movido para FALSIFIED em §3.2; PGO regen ISOLADO promovido para §6.2. Hipótese da falsification: inner-loop overhead em quote position offset early-terminate de findKeyExact original (most keys found near top of body). t2 outlier 5819/1.52 ms registrado mas inconclusive em 3-trial sample sob host ruim.
+- **2026-05-21** (terceira edição, post-Onda 16 falsification): Onda 16 (PGO regen ISOLATED) testada disciplinadamente. Recipe Dockerfile.train + host run + k6 train + SIGTERM funcionou (k6 instr = 6000/0.39ms; iprof 4.1 MB capturada). Native build `:onda16` OK. G5 calib sob host degradado (load 4.96, swap 13 GB): t1=4946/11.31ms (positive signal!) t2=4554/27.87ms t3=4170/67.47ms → median **4554/27.87ms** — REGRESS branch acionado (4554 < 4730). Revert. Lever §6.3 (PGO regen) movido para FALSIFIED em §3.6. Reusable lesson: PGO branch frequencies são determined by INPUT data (k6 seed 4242), não por CPU placement / socket tunings — compose-only changes não motivam PGO regen. NOVA lever §6.7 adicionada: reboot host + retest baseline + retry Onda 15/16 — t1 de ambas as ondas mostrou positive signal que pode ser perdido na noise; vale revalidar sob host limpo. Próximo lever atual: §6.2 = HAProxy `tune.maxaccept=64` ISOLADO (compose-only, sem rebuild, baixo risco).
