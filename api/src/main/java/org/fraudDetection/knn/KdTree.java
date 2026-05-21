@@ -206,20 +206,21 @@ public final class KdTree {
     public int lastDistinctLines()   { return distinctUnits(scratch, 64); }
     public boolean lastAccessTrunc() { return scratch.accessTrunc; }
 
-    // Onda 12+ Fase 1 — rerank instrumentation accessors.
+    // Onda 22 — rerank instrumentation accessors.
     public int lastRerankCandidates()  { return scratch.rerankCandidates; }
     public int lastRerankDoubleCalls() { return scratch.rerankDoubleCalls; }
     public int lastRerankInsertions()  { return scratch.rerankInsertions; }
+    public int lastRerankH2Skipped()   { return scratch.rerankH2Skipped; }
     public int lastPeekSumFinalI16()   { return scratch.peekSumFinalI16; }
     /**
-     * #{i : poolI16SumLog[i] > peekSumFinalI16} sobre {@code [0, poolSize)}.
-     * Retorna -1 quando INSTR=false (log não foi gravado). Usado offline para
-     * estimar o teto teórico de uma poda por bound i16 no rerank.
+     * #{i : poolI16Sum[i] > peekSumFinalI16} sobre {@code [0, poolSize)}.
+     * Onda 22 H2: {@code poolI16Sum} agora é unconditional em produção,
+     * então este accessor é sempre meaningful (não precisa de {@code INSTR}).
+     * Em produção pós-H2, esse conjunto corresponde a candidatos H2-podados
+     * (módulo dedup-skip que pode acontecer antes).
      */
     public int lastPoolAboveFinal() {
-        if (!INSTR) return -1;
-        int[] log = scratch.poolI16SumLog;
-        if (log == null) return -1;
+        int[] log = scratch.poolI16Sum;
         int t = scratch.peekSumFinalI16;
         int n = scratch.poolSize;
         int c = 0;
@@ -368,7 +369,9 @@ public final class KdTree {
             if (s.poolSize < KdScratch.POOL_CAP) {
                 s.poolTreeIdx[s.poolSize] = treeIdx;
                 s.poolOrig[s.poolSize] = origIdAt(treeIdx);
-                if (INSTR) s.poolI16SumLog[s.poolSize] = dist;
+                // Onda 22 H2: gravamos i16Sum unconditionally (era INSTR-gated na Fase 1);
+                // {@link KdTree#search} usa para early-exit por i16-5th bound.
+                s.poolI16Sum[s.poolSize] = dist;
                 s.poolSize++;
                 if (s.poolSize > s.maxPool) s.maxPool = s.poolSize;
             }
@@ -395,6 +398,7 @@ public final class KdTree {
         s.bbfSlabNext = 0;
         s.poolSize = 0;
         s.rerankCandidates = 0; s.rerankDoubleCalls = 0; s.rerankInsertions = 0;
+        s.rerankH2Skipped = 0;
         s.peekSumFinalI16 = 0;
         short[] pqi = s.permutedQueryI16;
         int[] perm = KdLayout.DIM_PERMUTATION;
@@ -416,7 +420,6 @@ public final class KdTree {
                 s.pageGen = new int[(int) (bytes / 4096) + 2];
                 s.lineGen = new int[(int) (bytes / 64) + 2];
             }
-            if (s.poolI16SumLog == null) s.poolI16SumLog = new int[KdScratch.POOL_CAP];
             s.accessCount = 0;
             s.accessTrunc = false;
         }
@@ -690,11 +693,17 @@ public final class KdTree {
         int[] pOrig = sc.poolOrig;
         int pn = sc.poolSize;
 
-        // Sort the pool by ascending origId (in-place heapsort over the two
-        // parallel arrays; zero-alloc). C scans refs i=0..N-1 in original index
-        // order; processing candidates by ascending origId + strict-< insertion
-        // reproduces "lowest original index wins ties" exactly.
-        heapsortByOrig(pTree, pOrig, pn);
+        // Sort the pool by ascending origId (in-place heapsort over THREE parallel
+        // arrays — zero-alloc). C scans refs i=0..N-1 in original index order;
+        // processing candidates by ascending origId + strict-< insertion reproduces
+        // "lowest original index wins ties" exactly.
+        //
+        // Onda 22 H2 (2026-05-21): poolI16Sum MUST be sorted in parallel with
+        // pTree/pOrig — the rerank loop reads {@code sc.poolI16Sum[p]} indexed by
+        // SORTED position p (the same p that indexes pOrig[p]/pTree[p]). Forgetting
+        // to swap poolI16Sum during the sort yields a misaligned bound check ⇒
+        // 50 %+ ExactAgree mismatches (bug detected & fixed pre-commit).
+        heapsortByOrig(pTree, sc.poolI16Sum, pOrig, pn);
 
         double[] dists = sc.rrDist;
         int[] idxs = sc.rrIdx;
@@ -702,6 +711,8 @@ public final class KdTree {
 
         short[] refSem = sc.refSemantic;
         double[] qR4 = sc.queryRound4;
+        int[] poolI16 = sc.poolI16Sum;
+        int finalI16 = sc.peekSumFinalI16;
         int[] inv = KdLayout.INV_PERMUTATION;
         int prevOrig = -1;
         for (int p = 0; p < pn; p++) {
@@ -709,6 +720,12 @@ public final class KdTree {
             int oid = pOrig[p];
             if (oid == prevOrig) continue; // dedup (same ref via different visits)
             prevOrig = oid;
+            // Onda 22 H2 (2026-05-21) — early-exit por i16-5th double bound argument
+            // (sound: see poolRecord doc; 1/1e8 integer-gap >> ~2e-14 round-off slack ⇒
+            // poolI16Sum[p] > peekSumFinalI16 ⇒ doubleSum strictly above 5th, can't enter
+            // top-5; ExactAgree 0/54100 prova empírica). Fase 1 mediu teto 86.20 % de
+            // candidatos podáveis (1.9 M of 2.2 M sobre 54100 entries).
+            if (poolI16[p] > finalI16) { sc.rerankH2Skipped++; continue; }
             int ti = pTree[p];
             sc.rerankDoubleCalls++;
             // dequantize this candidate to SEMANTIC i16 order
@@ -761,29 +778,33 @@ public final class KdTree {
         return -1;
     }
 
-    /** In-place heapsort of parallel arrays keyed by {@code key} (ascending). */
-    private static void heapsortByOrig(int[] aux, int[] key, int n) {
-        // build max-heap
-        for (int i = (n >> 1) - 1; i >= 0; i--) siftDown(aux, key, i, n);
+    /** In-place heapsort of THREE parallel arrays keyed by {@code key} (ascending).
+     *  Onda 22 H2: extended from 2 to 3 arrays to keep {@code poolI16Sum} aligned
+     *  with {@code pTree}/{@code pOrig} so the H2 bound check
+     *  {@code sc.poolI16Sum[p] > peekSumFinalI16} reads the correct i16Sum per
+     *  sorted candidate. */
+    private static void heapsortByOrig(int[] aux, int[] sumAux, int[] key, int n) {
+        for (int i = (n >> 1) - 1; i >= 0; i--) siftDown(aux, sumAux, key, i, n);
         for (int end = n - 1; end > 0; end--) {
-            swap(aux, key, 0, end);
-            siftDown(aux, key, 0, end);
+            swap(aux, sumAux, key, 0, end);
+            siftDown(aux, sumAux, key, 0, end);
         }
     }
 
-    private static void siftDown(int[] aux, int[] key, int i, int n) {
+    private static void siftDown(int[] aux, int[] sumAux, int[] key, int i, int n) {
         while (true) {
             int l = 2 * i + 1, r = l + 1, mx = i;
             if (l < n && key[l] > key[mx]) mx = l;
             if (r < n && key[r] > key[mx]) mx = r;
             if (mx == i) return;
-            swap(aux, key, i, mx);
+            swap(aux, sumAux, key, i, mx);
             i = mx;
         }
     }
 
-    private static void swap(int[] aux, int[] key, int x, int y) {
-        int t = key[x]; key[x] = key[y]; key[y] = t;
-        t = aux[x]; aux[x] = aux[y]; aux[y] = t;
+    private static void swap(int[] aux, int[] sumAux, int[] key, int x, int y) {
+        int t = key[x];    key[x]    = key[y];    key[y]    = t;
+        t = aux[x];        aux[x]    = aux[y];    aux[y]    = t;
+        t = sumAux[x];     sumAux[x] = sumAux[y]; sumAux[y] = t;
     }
 }

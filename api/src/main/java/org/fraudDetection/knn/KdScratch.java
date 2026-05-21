@@ -34,22 +34,34 @@ final class KdScratch {
     int visits;
     int vPrime, vBBF, vDescend; // Onda 9: breakdown de visits (prime / BBF / descend-fallback)
 
-    // Onda 12+ Fase 1 — rerank instrumentation. Unconditional ints (mesmo padrão de
+    // Onda 22 Fase 1 — rerank instrumentation. Unconditional ints (mesmo padrão de
     // {@code visits}/{@code vBBF}): custo zero em produção e nenhum risco de alloc.
-    //   rerankCandidates  = iterações do for em {@link KdTree#search} (cobre dedup-skip)
-    //   rerankDoubleCalls = chamadas a {@code sqDistDoubleLikeC} (pós-dedup)
+    //   rerankCandidates  = iterações do for em {@link KdTree#search} (cobre dedup-skip + H2-skip)
+    //   rerankDoubleCalls = chamadas a {@code sqDistDoubleLikeC} (pós-dedup, pós-H2)
     //   rerankInsertions  = vezes que o ramo {@code d < dists[j]} foi tomado
+    //   rerankH2Skipped   = (Onda 22 H2) candidatos podados por i16-bound antes do double kernel
     //   peekSumFinalI16   = {@code results.peekSum()} pós-descendBBF (bound i16 final)
-    int rerankCandidates, rerankDoubleCalls, rerankInsertions;
+    int rerankCandidates, rerankDoubleCalls, rerankInsertions, rerankH2Skipped;
     int peekSumFinalI16;
     /**
-     * INSTR-gated parallel log: i16 squared sum no momento em que cada nó entrou no pool
-     * (gravado em {@link KdTree#poolRecord} antes do incremento de {@code poolSize}).
-     * Lazy alloc em {@link KdTree#prepareSearch} sob {@code KdTree.INSTR}; permanece
-     * {@code null} em produção ⇒ zero footprint extra. Usado em offline replay
-     * (VisitsReplay) para computar {@code poolAboveFinal} = #{i : log[i] > peekSumFinalI16}.
+     * H2 (2026-05-21) — parallel array storing the i16 squared sum at admission for
+     * each pool entry (written in {@link KdTree#poolRecord} before the {@code poolSize++}).
+     * UNCONDITIONAL in production: {@link KdTree#search}'s rerank loop reads it to skip
+     * candidates whose {@code i16Sum > peekSumFinalI16} BEFORE calling the expensive
+     * double kernel ({@code sqDistDoubleLikeC}).
+     *
+     * <p><b>Soundness</b> (the i16-5th double bound argument, documented in
+     * {@link KdTree#poolRecord}): any node with {@code i16Sum > final-5th's i16Sum}
+     * has {@code doubleSum > final-5th's doubleSum} by ≥ ~1e-8 ({@code 1/1e8} integer-gap
+     * dominates the ~1e-14 round-off slack), so it cannot displace the exact double
+     * top-5. Empirically proven by {@code ExactAgree} 0 / 54 100 mismatches.
+     *
+     * <p><b>Footprint</b>: {@code int[POOL_CAP] = 256 KB} per scratch. One instance per
+     * JVM (single-threaded NIO reactor) — flat 256 KB constant. Only the first
+     * {@code poolSize} entries (mean 40, max 76 observed Onda 22 Fase 1) are written/read
+     * per query, so the warm working set is L1-resident.
      */
-    int[] poolI16SumLog;
+    final int[] poolI16Sum = new int[POOL_CAP];
 
     // Onda 11 Phase B v2 (2026-05-20): grow caps 256→1024 to support
     // BBF_MAX_DEPTH 18→22, which routes the ~167 deep visits (formerly the

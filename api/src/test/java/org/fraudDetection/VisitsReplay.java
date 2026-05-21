@@ -52,12 +52,12 @@ public final class VisitsReplay {
 
         int cap = 54100;
         int[] vis = new int[cap], pg = new int[cap], ln = new int[cap];
-        // Onda 12+ Fase 1 — rerank-stage instrumentation arrays.
+        // Onda 22 rerank-stage instrumentation arrays.
         int[] rCand = new int[cap], rDouble = new int[cap], rIns = new int[cap];
-        int[] rAbove = new int[cap], rPeek = new int[cap];
+        int[] rAbove = new int[cap], rPeek = new int[cap], rH2 = new int[cap];
         int total = 0, parseFail = 0, trunc = 0;
         long sVis = 0, sPg = 0, sLn = 0, sP = 0, sB = 0, sD = 0;
-        long sRC = 0, sRD = 0, sRI = 0, sRA = 0, sRP = 0;
+        long sRC = 0, sRD = 0, sRI = 0, sRA = 0, sRP = 0, sRH = 0;
 
         TestDataReader.Entry e;
         while ((e = rd.next()) != null && total < limit) {
@@ -78,15 +78,16 @@ public final class VisitsReplay {
             int ri = tree.lastRerankInsertions();
             int ra = tree.lastPoolAboveFinal();
             int rp = tree.lastPeekSumFinalI16();
+            int rh = tree.lastRerankH2Skipped();
             if (tree.lastAccessTrunc()) trunc++;
             if (total < cap) {
                 vis[total] = v; pg[total] = p; ln[total] = l;
                 rCand[total] = rc; rDouble[total] = rd2; rIns[total] = ri;
-                rAbove[total] = ra; rPeek[total] = rp;
+                rAbove[total] = ra; rPeek[total] = rp; rH2[total] = rh;
             }
             sVis += v; sPg += p; sLn += l;
             sP += tree.lastVPrime(); sB += tree.lastVBBF(); sD += tree.lastVDescend();
-            sRC += rc; sRD += rd2; sRI += ri; sRA += ra; sRP += rp;
+            sRC += rc; sRD += rd2; sRI += ri; sRA += ra; sRP += rp; sRH += rh;
             total++;
         }
 
@@ -96,6 +97,7 @@ public final class VisitsReplay {
         report("distinctLines ", ln, m, sLn);
         report("rerank.cand   ", rCand, m, sRC);
         report("rerank.double ", rDouble, m, sRD);
+        report("rerank.h2skip ", rH2, m, sRH);
         report("rerank.ins    ", rIns, m, sRI);
         report("poolAboveFinal", rAbove, m, sRA);
         report("peekSumFinalI16", rPeek, m, sRP);
@@ -104,20 +106,31 @@ public final class VisitsReplay {
                 sP / mm, sB / mm, sD / mm, sVis / mm);
 
         // Derivadas agregadas (sobre o total, não média de razões — evita viés de
-        // queries com poucos candidatos dominarem a média).
-        double dedupRatio   = sRC > 0 ? (double) (sRC - sRD) / sRC * 100.0 : 0.0;
+        // queries com poucos candidatos dominarem a média). Pós-H2: dedup_skipped
+        // = candidates - double - h2_skipped (H2 e dedup são caminhos diferentes
+        // de "continue" no loop; rerankCandidates conta TODAS as iterações).
+        long dedupSkipped   = sRC - sRD - sRH;
+        double dedupRatio   = sRC > 0 ? (double) dedupSkipped / sRC * 100.0 : 0.0;
+        double h2Ratio      = sRC > 0 ? (double) sRH / sRC * 100.0 : 0.0;
         double earlyExit    = sRC > 0 ? (double) sRA / sRC * 100.0 : 0.0;
         double doubleShare  = sRC > 0 ? (double) sRD / sRC * 100.0 : 0.0;
-        System.out.printf("dedup.ratio (agg)         = %.2f%%   (%d skipped of %d candidates)%n",
-                dedupRatio, (sRC - sRD), sRC);
-        System.out.printf("earlyExit.potential (agg) = %.2f%%   (%d candidates with i16Sum > final-5th of %d)%n",
+        System.out.printf("dedup.ratio (agg)         = %.2f%%   (%d dedup-skipped of %d candidates)%n",
+                dedupRatio, dedupSkipped, sRC);
+        System.out.printf("h2.skip.ratio (agg)       = %.2f%%   (%d H2-pruned of %d candidates)%n",
+                h2Ratio, sRH, sRC);
+        System.out.printf("earlyExit.potential (agg) = %.2f%%   (%d pool entries with i16Sum > final-5th of %d)%n",
                 earlyExit, sRA, sRC);
         System.out.printf("double.share (agg)        = %.2f%%   (%d sqDistDoubleLikeC calls of %d candidates)%n",
                 doubleShare, sRD, sRC);
 
-        // p50/p99 das razões dedup e earlyExit — útil pra ver a cauda.
-        reportRatio("dedup.ratio   ", rCand, rDouble, m, true);
-        reportRatio("earlyExit.pot ", rCand, rAbove,  m, false);
+        // p50/p99 das razões dedup, h2, e earlyExit — útil pra ver a cauda.
+        // Pre-build dedup-only array p/ reportRatio.
+        int[] rDedupOnly = new int[m];
+        for (int i = 0; i < m; i++) rDedupOnly[i] = rCand[i] - rDouble[i] - rH2[i];
+        reportRatio("dedup.ratio   ", rCand, rDedupOnly, m, false);
+        reportRatio("h2.skip.ratio ", rCand, rH2,        m, false);
+        reportRatio("earlyExit.pot ", rCand, rAbove,     m, false);
+        reportRatio("double.share  ", rCand, rDouble,    m, false);
 
         System.out.println("──────────────────────────────────────────────────────────");
         System.out.println("entries: " + total + "  parseFail: " + parseFail
