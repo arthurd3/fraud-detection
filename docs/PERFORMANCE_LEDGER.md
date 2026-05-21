@@ -57,6 +57,7 @@ Sorted oldest → newest. *Calib columns are MEDIAN of 3 trials.*
 | Onda 13 | **6e6d766** | `:onda12` | `cpuset` (0/1/2) + sysctls `somaxconn=1024` + `tcp_fastopen=3` | **4836** | **14.59ms** | (pending) | ✓ |
 | Onda 14 | (revert) | `:onda14` (deleted) | BUNDLE: parser `indexKeys` + `-H:+RemoveUnusedSymbols` + HAProxy `bufsize=4096`/`maxaccept=32`/`rcvbuf` + timeouts 1s/5s/5s + PGO regen | 4573 | 26.73ms | — | ✗ REGRESS, revert |
 | Onda 15a | (no commit) | `:onda12` | HAProxy `tune.bufsize=8192` only | 4505 | 31.3ms | — | ✗ no-op/regress in noisy calib |
+| Onda 15 | (revert) | `:onda15` (deleted) | Parser `indexKeys` single-pass ISOLATED (G2 PASS, G3 PASS, G4 unchanged) — first 1-lever discipline test | 4584 | 26.05ms | — | ✗ FALSIFIED isolated (noisy host; t2 outlier 5819/1.52 ms inconclusive) |
 
 ---
 
@@ -82,17 +83,17 @@ For each component: **WINNERS** (kept), **FALSIFIED** (do not repeat), **OPEN** 
 
 **OPEN** (none worth pursuing): floor at ~270 bbf+descend visits is structural for 14-D KD-tree + BBF; further reduction requires either E>0 or architectural change (both blocked by constraints).
 
-### 3.2 JSON parser (~30-40 µs, OPEN — biggest unclaimed lever)
+### 3.2 JSON parser (~30-40 µs, partially OPEN)
 
-**WINNERS**: none yet (Onda 14 attempted indexKeys but in a bundle, hard to attribute).
+**WINNERS**: none yet.
 
-**FALSIFIED**: none specifically.
+**FALSIFIED**:
+- **Single-pass `indexKeys` per scope** (Onda 15, 2026-05-21, ISOLATED). G2 PASS over 54 100 (E=0 correct), G3 zero-alloc PASS, G4 visits 310 unchanged. Calib 3 trials sob host degradado (load 12.15, swap 13 GB): final 4584.25 / 4448.24 / 5819.18 → median **4584.25 / 26.05 ms**; vs noisy-baseline (Onda 13 rerun mesmo dia) 4615/24.24 → essentially no-op (−31 final, +1.81 ms p99, within ~1400-spread noise). Strict criterion (4584 < 4730) → FALSIFIED + revert. **Hypothesis why**: inner-loop overhead of trying every key at each `"` position offsets the wins of avoiding redundant scans, when most keys are found near the top of the body (original `findKeyExact` early-terminates at first match). Reusable lesson: single-pass vs early-terminate is a coin flip for small key sets; only worth it when keys are deep in body.
 
-**OPEN** (next priority for isolated attack):
-1. **Single-pass `indexKeys` per scope** — replaces 17 `findKeyExact` calls (~8-12 µs total). G2 ExactAgree PASS confirms correctness when isolated (proven in Onda 14 Phase A). Risk: inner loop may not actually be faster than current early-terminate scan; needs ISOLATED calib measurement.
-2. **Pre-permute `queryQ16` in parser** — KdTree.prepareSearch currently re-permutes; ~50 ns saved.
-3. **Inline `strEnd` / `bool` / `nextNonWs`** — micro-opts; GraalVM likely already inlines.
-4. **Perfect-hash dispatch on first byte of key** — `{'a','c','i','k','m','t'}` buckets; speculative.
+**OPEN** (de-prioritized vs §6):
+- Pre-permute `queryQ16` in parser — KdTree.prepareSearch currently re-permutes; ~50 ns saved (marginal).
+- Inline `strEnd` / `bool` / `nextNonWs` — micro-opts; GraalVM likely already inlines.
+- Perfect-hash dispatch on first byte of key — `{'a','c','i','k','m','t'}` buckets; speculative; complex.
 
 ### 3.3 HAProxy
 
@@ -211,13 +212,13 @@ Calib rig is a **proxy** for Mac Mini, not a precise simulator. Variance changes
 | Pri | Lever | Hipótese | Custo cycle | Risco | Como medir |
 |-----|-------|---------|---|---|---|
 | **1** | **Mac Mini preview do Onda 13 atual** (`:onda12` + cpuset+sysctls compose) | Mede a vitória já garantida pelo Onda 13 antes de qualquer mudança nova | 0 (só abrir issue rinha/test) | nulo | upstream issue |
-| **2** | Parser `indexKeys` ISOLADO (sem AOT/HAProxy/PGO regen) | Ganha 5-8 µs/req se o single-pass é mais rápido que early-terminate scan | rebuild 5-10 min + 3 trials | E=0 verificável via G2; pode no-op/regress | calib 3 trials + G2 |
-| **3** | PGO regen ISOLADO contra Onda 13 source | Recovers ~1-2% se PGO ficou stale após cpuset (raro) | 15 min cycle | nulo | calib 3 trials |
-| **4** | HAProxy `tune.maxaccept=64` ISOLADO | Lighter throttle de accept burst (menos que 32, mais que 100) | compose-only, sem rebuild | baixo | calib 3 trials |
-| **5** | `-H:+RemoveUnusedSymbols` ISOLADO | I-cache tighter — tested in Onda 14 bundle, isolated unclear | rebuild 5-10 min | nulo | calib 3 trials |
-| **6** | `cfs_period_us=20000` ISOLADO (override calib `cpus:`) | Burst window 20 ms → smoother throttling | compose-only, complex override | médio | calib 3 trials |
-| **7** | `mlockall()` via JNI (NÃO FFM) | Lock mmap pages contra eviction sob cgroup | JNI 1 file, rebuild | baixo | calib 3 trials |
-| **8** | Profiling `perf stat` (`paranoid=1` 1 sudo) | Confirma qual componente domina cycles sob calib | 20 min cycle | nulo | perf stat -d output |
+| ~~2~~ | ~~Parser `indexKeys` ISOLADO~~ | ~~~~ | — | — | FALSIFIED 2026-05-21 (Onda 15, ver §3.2) |
+| **2** | PGO regen ISOLADO contra Onda 13 source | Recovers ~1-2% se PGO ficou stale após cpuset (raro) | 15 min cycle | nulo | calib 3 trials |
+| **3** | HAProxy `tune.maxaccept=64` ISOLADO | Lighter throttle de accept burst (menos que 32, mais que 100) | compose-only, sem rebuild | baixo | calib 3 trials |
+| **4** | `-H:+RemoveUnusedSymbols` ISOLADO | I-cache tighter — tested in Onda 14 bundle, isolated unclear | rebuild 5-10 min | nulo | calib 3 trials |
+| **5** | `cfs_period_us=20000` ISOLADO (override calib `cpus:`) | Burst window 20 ms → smoother throttling | compose-only, complex override | médio | calib 3 trials |
+| **6** | `mlockall()` via JNI (NÃO FFM) | Lock mmap pages contra eviction sob cgroup | JNI 1 file, rebuild | baixo | calib 3 trials |
+| **7** | Profiling `perf stat` (`paranoid=1` 1 sudo) | Confirma qual componente domina cycles sob calib | 20 min cycle | nulo | perf stat -d output |
 
 ---
 
@@ -240,3 +241,4 @@ Calib rig is a **proxy** for Mac Mini, not a precise simulator. Variance changes
 ## 8. Histórico de mudanças deste documento
 
 - **2026-05-21**: criação. Documenta estado pós-Onda 14 revert. Próximo ataque sugerido = §6 lever #1 (Mac Mini preview do Onda 13).
+- **2026-05-21** (segunda edição, post-Onda 15 falsification): Onda 15 (parser `indexKeys` ISOLATED) testada disciplinadamente. G1-G4 todos PASS (semântica correta, E=0 preserved). G5 calib sob host degradado (load 12.15, swap 13 GB) deu median 4584/26.05 ms vs noisy-baseline 4615/24.24 — essentially no-op (strict acceptance criterion 4730 violado). Revert per protocolo. Lever §6.2 (parser indexKeys) movido para FALSIFIED em §3.2; PGO regen ISOLADO promovido para §6.2. Hipótese da falsification: inner-loop overhead em quote position offset early-terminate de findKeyExact original (most keys found near top of body). t2 outlier 5819/1.52 ms registrado mas inconclusive em 3-trial sample sob host ruim.
