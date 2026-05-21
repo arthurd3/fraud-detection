@@ -123,13 +123,13 @@ For each component: **WINNERS** (kept), **FALSIFIED** (do not repeat), **OPEN** 
 - `selector.select()` blocking → `selectNow()` / `select(1)` to reduce idle-wakeup tail.
 - Multi-selector pattern — NOT useful at cpus=0.425 single-thread budget.
 
-### 3.5 Container / cgroup (BIG WINS)
+### 3.5 Container / cgroup
 
 **WINNERS**:
-- (Onda 13) `cpuset` pinning: haproxy=0, api-1=1, api-2=2 — **−47% p99 in calib** (biggest single-wave gain).
-- (Onda 13) sysctls `net.core.somaxconn=1024` + `net.ipv4.tcp_fastopen=3`.
+- (Onda 13) `cpuset` pinning: haproxy=0, api-1=1, api-2=2 — measured −47 % p99 in calib (with sysctls also active; isolated cpuset gain unmeasured).
 
-**FALSIFIED**: none.
+**FALSIFIED (by Rinha rules, not by perf)**:
+- (Onda 13) sysctls `net.core.somaxconn=1024` + `net.ipv4.tcp_fastopen=3` — **BANNED by Rinha rules**, rejection #5854 on 2026-05-21 ("using 'sysctls' not allowed (services: api-1, api-2)"). Removed from submission compose in commit `3d95346`. Kept on `main` `docker-compose.yml` only for local calib measurements (does not ship). Their contribution to the Onda 13 calib measurement (4836/14.59ms median) is now confounded with the cpuset gain.
 
 **OPEN**:
 - `cfs_period_us` shrink (100 ms → 20 ms) — burst window reduction; complex due to calib overlay using `cpus:` short-form.
@@ -202,6 +202,7 @@ Calib rig is a **proxy** for Mac Mini, not a precise simulator. Variance changes
 - **E=0 strict** — `ExactAgree` 0-div over 54 100 entries (FP=0, FN=0).
 - **Java / GraalVM native-image only** — no FFM, Unsafe, Vector API (all broke native link historically).
 - **Topology** — HAProxy + 2 backends, ≤ 350 MB RAM total, ≤ 1.0 CPU total (Rinha rules).
+- **`sysctls:` PROHIBITED** in submission compose services (Rinha rejection #5854, 2026-05-21: "using 'sysctls' not allowed (services: api-1, api-2)"). Discovered after Onda 13 already used it. Removed from submission (commit `3d95346`); kept on `main` `docker-compose.yml` for local calib only.
 - **detection_score = 3000 / 3000 MAX** — accuracy is saturated; all remaining gap is in `p99_score`.
 - **No pre-baking test answers** — the schema is fixed but bakings would be cheating.
 
@@ -246,3 +247,4 @@ Calib rig is a **proxy** for Mac Mini, not a precise simulator. Variance changes
 - **2026-05-21**: criação. Documenta estado pós-Onda 14 revert. Próximo ataque sugerido = §6 lever #1 (Mac Mini preview do Onda 13).
 - **2026-05-21** (segunda edição, post-Onda 15 falsification): Onda 15 (parser `indexKeys` ISOLATED) testada disciplinadamente. G1-G4 todos PASS (semântica correta, E=0 preserved). G5 calib sob host degradado (load 12.15, swap 13 GB) deu median 4584/26.05 ms vs noisy-baseline 4615/24.24 — essentially no-op (strict acceptance criterion 4730 violado). Revert per protocolo. Lever §6.2 (parser indexKeys) movido para FALSIFIED em §3.2; PGO regen ISOLADO promovido para §6.2. Hipótese da falsification: inner-loop overhead em quote position offset early-terminate de findKeyExact original (most keys found near top of body). t2 outlier 5819/1.52 ms registrado mas inconclusive em 3-trial sample sob host ruim.
 - **2026-05-21** (terceira edição, post-Onda 16 falsification): Onda 16 (PGO regen ISOLATED) testada disciplinadamente. Recipe Dockerfile.train + host run + k6 train + SIGTERM funcionou (k6 instr = 6000/0.39ms; iprof 4.1 MB capturada). Native build `:onda16` OK. G5 calib sob host degradado (load 4.96, swap 13 GB): t1=4946/11.31ms (positive signal!) t2=4554/27.87ms t3=4170/67.47ms → median **4554/27.87ms** — REGRESS branch acionado (4554 < 4730). Revert. Lever §6.3 (PGO regen) movido para FALSIFIED em §3.6. Reusable lesson: PGO branch frequencies são determined by INPUT data (k6 seed 4242), não por CPU placement / socket tunings — compose-only changes não motivam PGO regen. NOVA lever §6.7 adicionada: reboot host + retest baseline + retry Onda 15/16 — t1 de ambas as ondas mostrou positive signal que pode ser perdido na noise; vale revalidar sob host limpo. Próximo lever atual: §6.2 = HAProxy `tune.maxaccept=64` ISOLADO (compose-only, sem rebuild, baixo risco).
+- **2026-05-21** (quarta edição, post-Rinha rejection #5854): Submission `351bd71` rejeitada pelo Rinha CI ("using 'sysctls' not allowed (services: api-1, api-2)"). §5 ganhou constraint explícita: `sysctls:` proibido em submission compose. §3.5 atualizada: as Onda 13 sysctls (`somaxconn=1024` + `tcp_fastopen=3`) movidas de WINNERS para "FALSIFIED by Rinha rules" — perf era real, mas não pode shipar. Importante: a medição calib Onda 13 (4836/14.59ms) estava INFLADA pelo sysctls. Submission re-pushed sem sysctls (commit `3d95346`). Próximo preview vai medir o que realmente ship: cpuset puro + KDTREE_MAX_VISITS env + HAProxy splice/tcp-smart-*.
