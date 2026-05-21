@@ -15,12 +15,41 @@ final class KdScratch {
     final int[] slab = new int[KdLayout.DIMS];
     /** Permuted query in i16 units; lanes 14..19 stay zero. */
     final short[] permutedQueryI16 = new short[KdLayout.STRIDE];
+    /**
+     * H1 (2026-05-21) — query in SEMANTIC order, already {@code round4}'d in double,
+     * pre-computed ONCE per query at {@link KdTree#prepareSearch}. The legacy
+     * {@code sqDistDoubleLikeC(float[], short[])} re-did {@code Math.round(q*1e4)/1e4}
+     * INSIDE the per-candidate loop (14 rounds × ~35 candidates ≈ 490 rounds/query);
+     * H1 hoists that to 14 rounds/query. Bit-identity holds because
+     * {@code ConnectionState.queryVector} is already round4'd at parse time
+     * ({@code FraudRequestParser#r4}) and {@code float→double→round4} is idempotent
+     * (Onda 7 v2 argument). Used by the new {@code sqDistDoubleLikeC(double[], short[])}
+     * overload via {@link KdTree#search}.
+     */
+    final double[] queryRound4 = new double[KdLayout.DIMS];
 
     // Onda 11 removed fanOutBuf/fanOutCount: the beam-of-2 prime tracks state in
     // local variables (best far child + delta²), so no per-query staging buffer
     // is needed. Saves 128 B per scratch and one less field to clear.
     int visits;
     int vPrime, vBBF, vDescend; // Onda 9: breakdown de visits (prime / BBF / descend-fallback)
+
+    // Onda 12+ Fase 1 — rerank instrumentation. Unconditional ints (mesmo padrão de
+    // {@code visits}/{@code vBBF}): custo zero em produção e nenhum risco de alloc.
+    //   rerankCandidates  = iterações do for em {@link KdTree#search} (cobre dedup-skip)
+    //   rerankDoubleCalls = chamadas a {@code sqDistDoubleLikeC} (pós-dedup)
+    //   rerankInsertions  = vezes que o ramo {@code d < dists[j]} foi tomado
+    //   peekSumFinalI16   = {@code results.peekSum()} pós-descendBBF (bound i16 final)
+    int rerankCandidates, rerankDoubleCalls, rerankInsertions;
+    int peekSumFinalI16;
+    /**
+     * INSTR-gated parallel log: i16 squared sum no momento em que cada nó entrou no pool
+     * (gravado em {@link KdTree#poolRecord} antes do incremento de {@code poolSize}).
+     * Lazy alloc em {@link KdTree#prepareSearch} sob {@code KdTree.INSTR}; permanece
+     * {@code null} em produção ⇒ zero footprint extra. Usado em offline replay
+     * (VisitsReplay) para computar {@code poolAboveFinal} = #{i : log[i] > peekSumFinalI16}.
+     */
+    int[] poolI16SumLog;
 
     // Onda 11 Phase B v2 (2026-05-20): grow caps 256→1024 to support
     // BBF_MAX_DEPTH 18→22, which routes the ~167 deep visits (formerly the

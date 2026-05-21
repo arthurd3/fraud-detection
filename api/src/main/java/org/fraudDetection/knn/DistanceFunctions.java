@@ -62,6 +62,10 @@ public final class DistanceFunctions {
      * exact same {@code (double)long / 10000.0} as C, and the per-term double rounding /
      * accumulation order (semantic 0..13) match C's loop bit-for-bit.
      *
+     * <p>Kept for tests / oracles (RecallHnsw, Rbh2Equiv, ExactAgree bruteDouble). The
+     * production rerank path uses the H1 overload {@link #sqDistDoubleLikeC(double[], short[])}
+     * which hoists the per-call round4 out to the caller (pre-computed once per query).
+     *
      * @param querySemantic14 the parsed query in SEMANTIC order (round4'd floats)
      * @param refI16Semantic   the candidate ref's i16 features in SEMANTIC order
      */
@@ -69,6 +73,32 @@ public final class DistanceFunctions {
         double sum = 0.0;
         for (int i = 0; i < 14; i++) {
             double a = round4((double) querySemantic14[i]);
+            double b = refI16Semantic[i] / 10000.0;
+            double d = a - b;
+            sum += d * d;
+        }
+        return sum;
+    }
+
+    /**
+     * H1 (2026-05-21) — same kernel as
+     * {@link #sqDistDoubleLikeC(float[], short[])} but with {@code round4(query)}
+     * already done by the caller (pre-computed once per query in
+     * {@link org.fraudDetection.knn.KdScratch#queryRound4}). Removes 14
+     * {@code Math.round} + 14 mults + 14 divs per call (~3 ops/lane × 14 ≈ 37 % of
+     * the ~112 fp ops of the inner kernel; HotSpot pre-H1 ≈ 29 ns/call).
+     *
+     * <p>Bit-identical to the legacy overload for queries where the caller passes
+     * {@code queryRound4[i] = Math.round((double) queryFloat * 10000.0) / 10000.0}.
+     * Soundness: the caller's pre-compute is the SAME expression as the legacy
+     * per-call line; floating-point determinism guarantees the same {@code double}
+     * value, so {@code a − b} and {@code d * d} are byte-identical. Proven over
+     * 54 100 queries by {@code ExactAgree} (E = 0).
+     */
+    public static double sqDistDoubleLikeC(double[] queryRound4_14, short[] refI16Semantic) {
+        double sum = 0.0;
+        for (int i = 0; i < 14; i++) {
+            double a = queryRound4_14[i];
             double b = refI16Semantic[i] / 10000.0;
             double d = a - b;
             sum += d * d;

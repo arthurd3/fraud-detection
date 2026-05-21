@@ -52,8 +52,12 @@ public final class VisitsReplay {
 
         int cap = 54100;
         int[] vis = new int[cap], pg = new int[cap], ln = new int[cap];
+        // Onda 12+ Fase 1 — rerank-stage instrumentation arrays.
+        int[] rCand = new int[cap], rDouble = new int[cap], rIns = new int[cap];
+        int[] rAbove = new int[cap], rPeek = new int[cap];
         int total = 0, parseFail = 0, trunc = 0;
         long sVis = 0, sPg = 0, sLn = 0, sP = 0, sB = 0, sD = 0;
+        long sRC = 0, sRD = 0, sRI = 0, sRA = 0, sRP = 0;
 
         TestDataReader.Entry e;
         while ((e = rd.next()) != null && total < limit) {
@@ -69,10 +73,20 @@ public final class VisitsReplay {
             int v = tree.lastVisits();
             int p = tree.lastDistinctPages();
             int l = tree.lastDistinctLines();
+            int rc = tree.lastRerankCandidates();
+            int rd2 = tree.lastRerankDoubleCalls();
+            int ri = tree.lastRerankInsertions();
+            int ra = tree.lastPoolAboveFinal();
+            int rp = tree.lastPeekSumFinalI16();
             if (tree.lastAccessTrunc()) trunc++;
-            if (total < cap) { vis[total] = v; pg[total] = p; ln[total] = l; }
+            if (total < cap) {
+                vis[total] = v; pg[total] = p; ln[total] = l;
+                rCand[total] = rc; rDouble[total] = rd2; rIns[total] = ri;
+                rAbove[total] = ra; rPeek[total] = rp;
+            }
             sVis += v; sPg += p; sLn += l;
             sP += tree.lastVPrime(); sB += tree.lastVBBF(); sD += tree.lastVDescend();
+            sRC += rc; sRD += rd2; sRI += ri; sRA += ra; sRP += rp;
             total++;
         }
 
@@ -80,14 +94,61 @@ public final class VisitsReplay {
         report("visits        ", vis, m, sVis);
         report("distinctPages ", pg, m, sPg);
         report("distinctLines ", ln, m, sLn);
+        report("rerank.cand   ", rCand, m, sRC);
+        report("rerank.double ", rDouble, m, sRD);
+        report("rerank.ins    ", rIns, m, sRI);
+        report("poolAboveFinal", rAbove, m, sRA);
+        report("peekSumFinalI16", rPeek, m, sRP);
         long mm = m == 0 ? 1 : m;
         System.out.printf("visits-breakdown mean: prime=%d  bbf=%d  descend=%d  (total=%d)%n",
                 sP / mm, sB / mm, sD / mm, sVis / mm);
+
+        // Derivadas agregadas (sobre o total, não média de razões — evita viés de
+        // queries com poucos candidatos dominarem a média).
+        double dedupRatio   = sRC > 0 ? (double) (sRC - sRD) / sRC * 100.0 : 0.0;
+        double earlyExit    = sRC > 0 ? (double) sRA / sRC * 100.0 : 0.0;
+        double doubleShare  = sRC > 0 ? (double) sRD / sRC * 100.0 : 0.0;
+        System.out.printf("dedup.ratio (agg)         = %.2f%%   (%d skipped of %d candidates)%n",
+                dedupRatio, (sRC - sRD), sRC);
+        System.out.printf("earlyExit.potential (agg) = %.2f%%   (%d candidates with i16Sum > final-5th of %d)%n",
+                earlyExit, sRA, sRC);
+        System.out.printf("double.share (agg)        = %.2f%%   (%d sqDistDoubleLikeC calls of %d candidates)%n",
+                doubleShare, sRD, sRC);
+
+        // p50/p99 das razões dedup e earlyExit — útil pra ver a cauda.
+        reportRatio("dedup.ratio   ", rCand, rDouble, m, true);
+        reportRatio("earlyExit.pot ", rCand, rAbove,  m, false);
+
         System.out.println("──────────────────────────────────────────────────────────");
         System.out.println("entries: " + total + "  parseFail: " + parseFail
                 + "  accessLog-trunc: " + trunc + (trunc > 0 ? "  ⚠ (raise cap)" : ""));
         System.out.println("(deterministic — comparar mean/p99/max entre iterações; "
                 + "queda de distinctPages prediz o ganho de p99 da Fase 2)");
+    }
+
+    /**
+     * Razão por query (escalonada × 10000 para usar int sort). Quando
+     * {@code complementOfDouble=true}, calcula dedup = (cand - other)/cand;
+     * caso contrário earlyExit = other/cand.
+     */
+    private static void reportRatio(String name, int[] cand, int[] other, int m, boolean complementOfDouble) {
+        if (m == 0) { System.out.printf("%s  (empty)%n", name); return; }
+        int[] r = new int[m];
+        long sum = 0;
+        int nz = 0;
+        for (int i = 0; i < m; i++) {
+            if (cand[i] <= 0) { r[i] = 0; continue; }
+            long num = complementOfDouble ? (long) (cand[i] - other[i]) : (long) other[i];
+            int scaled = (int) (num * 10000L / cand[i]); // permil + 1 casa
+            r[i] = scaled; sum += scaled; nz++;
+        }
+        java.util.Arrays.sort(r);
+        int p50 = r[(int) (m * 0.50)];
+        int p99 = r[(int) Math.min(m - 1, (long) (m * 0.99))];
+        int max = r[m - 1];
+        double mean = nz > 0 ? (double) sum / nz : 0.0;
+        System.out.printf("%s  mean=%.2f%%   p50=%.2f%%   p99=%.2f%%   max=%.2f%%%n",
+                name, mean / 100.0, p50 / 100.0, p99 / 100.0, max / 100.0);
     }
 
     private static void report(String name, int[] a, int m, long sum) {

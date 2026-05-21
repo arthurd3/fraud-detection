@@ -206,6 +206,28 @@ public final class KdTree {
     public int lastDistinctLines()   { return distinctUnits(scratch, 64); }
     public boolean lastAccessTrunc() { return scratch.accessTrunc; }
 
+    // Onda 12+ Fase 1 — rerank instrumentation accessors.
+    public int lastRerankCandidates()  { return scratch.rerankCandidates; }
+    public int lastRerankDoubleCalls() { return scratch.rerankDoubleCalls; }
+    public int lastRerankInsertions()  { return scratch.rerankInsertions; }
+    public int lastPeekSumFinalI16()   { return scratch.peekSumFinalI16; }
+    /**
+     * #{i : poolI16SumLog[i] > peekSumFinalI16} sobre {@code [0, poolSize)}.
+     * Retorna -1 quando INSTR=false (log não foi gravado). Usado offline para
+     * estimar o teto teórico de uma poda por bound i16 no rerank.
+     */
+    public int lastPoolAboveFinal() {
+        if (!INSTR) return -1;
+        int[] log = scratch.poolI16SumLog;
+        if (log == null) return -1;
+        int t = scratch.peekSumFinalI16;
+        int n = scratch.poolSize;
+        int c = 0;
+        for (int i = 0; i < n; i++) if (log[i] > t) c++;
+        return c;
+    }
+    public int lastPoolSize() { return scratch.poolSize; }
+
     /** Distinct {@code unitBytes}-aligned units of {@code pts} touched this query
      *  (a 40 B node may straddle one boundary → start+end unit both counted). */
     private int distinctUnits(KdScratch s, int unitBytes) {
@@ -346,6 +368,7 @@ public final class KdTree {
             if (s.poolSize < KdScratch.POOL_CAP) {
                 s.poolTreeIdx[s.poolSize] = treeIdx;
                 s.poolOrig[s.poolSize] = origIdAt(treeIdx);
+                if (INSTR) s.poolI16SumLog[s.poolSize] = dist;
                 s.poolSize++;
                 if (s.poolSize > s.maxPool) s.maxPool = s.poolSize;
             }
@@ -371,10 +394,20 @@ public final class KdTree {
         s.bbfSize = 0;
         s.bbfSlabNext = 0;
         s.poolSize = 0;
+        s.rerankCandidates = 0; s.rerankDoubleCalls = 0; s.rerankInsertions = 0;
+        s.peekSumFinalI16 = 0;
         short[] pqi = s.permutedQueryI16;
         int[] perm = KdLayout.DIM_PERMUTATION;
         for (int d = 0; d < DIMS; d++) pqi[d] = Quantizer.q16(querySemantic[perm[d]]);
         for (int d = DIMS; d < STRIDE; d++) pqi[d] = 0;
+
+        // H1 (2026-05-21) — pre-compute round4(query) in SEMANTIC order ONCE per
+        // query. Hoists 14 Math.round/mult/div from the per-candidate rerank loop
+        // (≈ 35 calls/query mean, 71 max) to a single 14-iter prologue. Identity
+        // proven by ExactAgree 54 100 0-div; algebraically the same expression
+        // as the per-call line in DistanceFunctions.sqDistDoubleLikeC(float[],…).
+        double[] qR4 = s.queryRound4;
+        for (int d = 0; d < DIMS; d++) qR4[d] = Math.round((double) querySemantic[d] * 10000.0) / 10000.0;
 
         if (INSTR) {
             if (s.accessLog == null) {
@@ -383,6 +416,7 @@ public final class KdTree {
                 s.pageGen = new int[(int) (bytes / 4096) + 2];
                 s.lineGen = new int[(int) (bytes / 64) + 2];
             }
+            if (s.poolI16SumLog == null) s.poolI16SumLog = new int[KdScratch.POOL_CAP];
             s.accessCount = 0;
             s.accessTrunc = false;
         }
@@ -645,6 +679,7 @@ public final class KdTree {
 
         prime(sc, KdTopK.MAX_K);
         descendBBF(sc, KdTopK.MAX_K);
+        sc.peekSumFinalI16 = sc.results.peekSum();
 
         // Ensure the i16 top-5 themselves are in the pool (they always satisfy
         // dist <= peekSum, but a tie at the boundary may have been dropped from
@@ -666,20 +701,24 @@ public final class KdTree {
         for (int i = 0; i < KdTopK.MAX_K; i++) { dists[i] = 1e30; idxs[i] = -1; }
 
         short[] refSem = sc.refSemantic;
+        double[] qR4 = sc.queryRound4;
         int[] inv = KdLayout.INV_PERMUTATION;
         int prevOrig = -1;
         for (int p = 0; p < pn; p++) {
+            sc.rerankCandidates++;
             int oid = pOrig[p];
             if (oid == prevOrig) continue; // dedup (same ref via different visits)
             prevOrig = oid;
             int ti = pTree[p];
+            sc.rerankDoubleCalls++;
             // dequantize this candidate to SEMANTIC i16 order
             for (int sdim = 0; sdim < DIMS; sdim++) refSem[sdim] = ptI16(ti, inv[sdim]);
-            double d = DistanceFunctions.sqDistDoubleLikeC(qSem, refSem);
+            double d = DistanceFunctions.sqDistDoubleLikeC(qR4, refSem);
             // C knn_classify: insertion-sort 5, strict '<' + break (ties: keep
             // the earlier — i.e. lower origId, which is our ascending order).
             for (int j = 0; j < KdTopK.MAX_K; j++) {
                 if (d < dists[j]) {
+                    sc.rerankInsertions++;
                     for (int kk = KdTopK.MAX_K - 1; kk > j; kk--) {
                         dists[kk] = dists[kk - 1];
                         idxs[kk] = idxs[kk - 1];
