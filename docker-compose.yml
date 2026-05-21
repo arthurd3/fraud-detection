@@ -8,18 +8,31 @@ services:
       - "9999:9999"
     depends_on: [api-1, api-2]
     networks: [app]
+    cpuset: "0"
     deploy:
       resources:
         limits: { cpus: "0.15", memory: "32M" }
   api-1:
     image: docker.io/arthurd3/rinha-fraud:onda12
+    environment:
+      - KDTREE_MAX_VISITS=1500
     networks: [app]
+    cpuset: "1"
+    sysctls:
+      - net.core.somaxconn=1024
+      - net.ipv4.tcp_fastopen=3
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
   api-2:
     image: docker.io/arthurd3/rinha-fraud:onda12
+    environment:
+      - KDTREE_MAX_VISITS=1500
     networks: [app]
+    cpuset: "2"
+    sysctls:
+      - net.core.somaxconn=1024
+      - net.ipv4.tcp_fastopen=3
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
