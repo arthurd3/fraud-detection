@@ -733,6 +733,12 @@ public final class KdTree {
             double d = DistanceFunctions.sqDistDoubleLikeC(qR4, refSem);
             // C knn_classify: insertion-sort 5, strict '<' + break (ties: keep
             // the earlier — i.e. lower origId, which is our ascending order).
+            // Onda 22 H6 (2026-05-21) FALSIFIED — branch-free 5-slot variant
+            // testada (9 trials BenchSearch): mean 16,339 vs H2 mean 16,274 =
+            // +0.4 % noise; H6 spread 10 % vs H2 spread 2 % ⇒ no-op-noisy. Por
+            // §7 protocolo, revertido. Ver ledger §3.1b FALSIFIED para detalhe.
+            // Branchful early-break vence porque rerank.ins ≈ rerank.double pós-H2
+            // (toda call insere) com predictable insertion-position distribution.
             for (int j = 0; j < KdTopK.MAX_K; j++) {
                 if (d < dists[j]) {
                     sc.rerankInsertions++;
