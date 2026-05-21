@@ -59,7 +59,8 @@ Sorted oldest → newest. *Calib columns are MEDIAN of 3 trials.*
 | Onda 15a | (no commit) | `:onda12` | HAProxy `tune.bufsize=8192` only | 4505 | 31.3ms | — | ✗ no-op/regress in noisy calib |
 | Onda 15 | (revert) | `:onda15` (deleted) | Parser `indexKeys` single-pass ISOLATED (G2 PASS, G3 PASS, G4 unchanged) — first 1-lever discipline test | 4584 | 26.05ms | — | ✗ FALSIFIED isolated (noisy host; t2 outlier 5819/1.52 ms inconclusive) |
 | Onda 16 | (revert) | `:onda16` (deleted) | PGO regen ISOLADO contra Onda 13 source (zero Java change, only `api/default.iprof` replaced); 2nd disciplined 1-lever test | 4554 | 27.87ms | — | ✗ FALSIFIED isolated (noisy host load 4.96 / swap 13 GB; t1 outlier 4946/11.31 ms positive signal but t3 outlier 4170/67.47 ms drags median down) |
-| Onda 17 | TBD | `:onda15` | SHIP parser `indexKeys` (Onda 15 code re-applied) despite calib falsification, per user decision to validate on Mac Mini; stale PGO from Onda 12; G1+G2 PASS (0 div / E=0) | (deferred, host busy) | (deferred) | (pending push) | ⏳ SHIPPED for preview |
+| Onda 17 | 7a9f994 / f84424e | `:onda15` | SHIP parser `indexKeys` (Onda 15 code re-applied) + cpuset + cap env + haproxy splice/tcp-smart; G1+G2 PASS | (calib deferred) | (calib deferred) | **4006.75 / 35.14ms / E=30** | ⚠️ regressed −456 vs Onda 12 due to cap |
+| Onda 18 | bb499cb (submission) | `:onda15` | Remove `KDTREE_MAX_VISITS` env (Onda 10 cap) from submission; binary unchanged (cap branch dead-code-eliminated when env absent); keeps cpuset + haproxy splice + parser | n/a (no rebuild) | n/a | (pending preview) | ⏳ shipped for preview |
 
 ---
 
@@ -122,16 +123,19 @@ For each component: **WINNERS** (kept), **FALSIFIED** (do not repeat), **OPEN** 
 - `selector.select()` blocking → `selectNow()` / `select(1)` to reduce idle-wakeup tail.
 - Multi-selector pattern — NOT useful at cpus=0.425 single-thread budget.
 
-### 3.5 Container / cgroup
+### 3.5 Container / cgroup / runtime env
 
 **WINNERS**:
-- (Onda 13) `cpuset` pinning: haproxy=0, api-1=1, api-2=2 — measured −47 % p99 in calib (with sysctls also active; isolated cpuset gain unmeasured).
+- (Onda 13) `cpuset` pinning: haproxy=0, api-1=1, api-2=2 — measured −47 % p99 in calib (with sysctls + cap also active; isolated cpuset gain on Mac Mini unmeasured yet).
 
-**FALSIFIED (by Rinha rules, not by perf)**:
-- (Onda 13) sysctls `net.core.somaxconn=1024` + `net.ipv4.tcp_fastopen=3` — **BANNED by Rinha rules**, rejection #5854 on 2026-05-21 ("using 'sysctls' not allowed (services: api-1, api-2)"). Removed from submission compose in commit `3d95346`. Kept on `main` `docker-compose.yml` only for local calib measurements (does not ship). Their contribution to the Onda 13 calib measurement (4836/14.59ms median) is now confounded with the cpuset gain.
+**FALSIFIED (by Rinha rules)**:
+- (Onda 13) sysctls `net.core.somaxconn=1024` + `net.ipv4.tcp_fastopen=3` — **BANNED by Rinha rules**, rejection #5854 on 2026-05-21. Removed from submission (commit `3d95346`).
+
+**FALSIFIED by Mac Mini (Onda 17 preview, 2026-05-21 10:52 BRT)**:
+- **`KDTREE_MAX_VISITS=1500` env var (Onda 10 visit cap)** — calib measured cap=1500 as +120 mean (Onda 10 sweep) but Mac Mini real run shows it costs **−447 detection_score** for **30 weighted errors** (FP=12, FN=6) while delivering essentially **0 ms p99 reduction** (35.14ms vs 34.38ms Onda 12 baseline = ruído). **NET: −456 final on Mac Mini.** Removed from submission compose in Onda 18 (commit `bb499cb`). Kept on `main` compose for local calib reference. **Reusable lesson**: calib rig measures latency-under-throttle; the cap helps when the system is SATURATED (queueing dominates p99). Mac Mini contest quota=1.0 is NOT saturated for this workload → cap's p99 benefit collapses but the accuracy cost stays. **Never ship an accuracy-trading lever on calib evidence alone; require Mac Mini preview confirmation.**
 
 **OPEN**:
-- `cfs_period_us` shrink (100 ms → 20 ms) — burst window reduction; complex due to calib overlay using `cpus:` short-form.
+- `cfs_period_us` shrink (100 ms → 20 ms) — burst window reduction; complex due to calib overlay using `cpus:` short-form. **Now even less attractive** since Mac Mini isn't saturated.
 - `--ulimit memlock=-1` + `mlockall()` via JNI — locks mmap pages, but JNI adds native dep.
 
 ### 3.6 Native image build (PGO + AOT flags)
@@ -201,7 +205,8 @@ Calib rig is a **proxy** for Mac Mini, not a precise simulator. Variance changes
 - **E=0 strict** — `ExactAgree` 0-div over 54 100 entries (FP=0, FN=0).
 - **Java / GraalVM native-image only** — no FFM, Unsafe, Vector API (all broke native link historically).
 - **Topology** — HAProxy + 2 backends, ≤ 350 MB RAM total, ≤ 1.0 CPU total (Rinha rules).
-- **`sysctls:` PROHIBITED** in submission compose services (Rinha rejection #5854, 2026-05-21: "using 'sysctls' not allowed (services: api-1, api-2)"). Discovered after Onda 13 already used it. Removed from submission (commit `3d95346`); kept on `main` `docker-compose.yml` for local calib only.
+- **`sysctls:` PROHIBITED** in submission compose services (Rinha rejection #5854, 2026-05-21). Removed from submission (commit `3d95346`); kept on `main` for local calib only.
+- **Calib latency wins must be VALIDATED by Mac Mini preview before shipping accuracy-trading levers** (Onda 17 preview lesson, 2026-05-21). The Onda 10 `KDTREE_MAX_VISITS=1500` cap was calib-validated (+120 mean) but Mac Mini-falsified (−456 final from −447 detection). Calib rig saturates under throttle; Mac Mini at quota=1.0 doesn't saturate. Any future cap / approximation lever must clear Mac Mini preview before shipping.
 - **detection_score = 3000 / 3000 MAX** — accuracy is saturated; all remaining gap is in `p99_score`.
 - **No pre-baking test answers** — the schema is fixed but bakings would be cheating.
 
@@ -213,10 +218,12 @@ Calib rig is a **proxy** for Mac Mini, not a precise simulator. Variance changes
 
 | Pri | Lever | Hipótese | Custo cycle | Risco | Como medir |
 |-----|-------|---------|---|---|---|
-| **1** | **Mac Mini preview do Onda 13 atual** (`:onda12` + cpuset+sysctls compose) | Mede a vitória já garantida pelo Onda 13 antes de qualquer mudança nova | 0 (só abrir issue rinha/test) | nulo | upstream issue |
-| ~~2~~ | ~~Parser `indexKeys` ISOLADO~~ | ~~~~ | — | — | FALSIFIED 2026-05-21 (Onda 15, ver §3.2) |
-| ~~3~~ | ~~PGO regen ISOLADO~~ | ~~~~ | — | — | FALSIFIED 2026-05-21 (Onda 16, ver §3.6) |
-| **2** | HAProxy `tune.maxaccept=64` ISOLADO | Lighter throttle de accept burst (menos que 32, mais que 100) | compose-only, sem rebuild | baixo | calib 3 trials |
+| ~~Mac Mini preview do Onda 13~~ | — | done in Onda 12 preview = 4463; Onda 17 added everything = 4006 (regress from cap); Onda 18 retries without cap (pending) | — | — | — |
+| ~~Parser `indexKeys` ISOLADO~~ | ~~~~ | — | — | calib falsified Onda 15 §3.2; shipped Onda 17 — pending Mac Mini ground truth |
+| ~~PGO regen ISOLADO~~ | ~~~~ | — | — | calib falsified Onda 16 §3.6 |
+| ~~`KDTREE_MAX_VISITS=1500` cap~~ | ~~~~ | — | — | **FALSIFIED by Mac Mini Onda 17 §3.5** — −447 detection, removed Onda 18 |
+| **1** | **Onda 18 Mac Mini preview** (cap removed, parser+cpuset+haproxy still active) | Recover Onda 12 baseline (4463) and measure isolated contribution of cpuset+haproxy+parser bundle on Mac Mini | 0 (just push + open issue) | nulo | upstream preview |
+| **2** | HAProxy `tune.maxaccept=64` ISOLADO | Lighter throttle de accept burst | compose-only, sem rebuild | baixo | preview |
 | **3** | `-H:+RemoveUnusedSymbols` ISOLADO | I-cache tighter — tested in Onda 14 bundle, isolated unclear | rebuild 5-10 min | nulo | calib 3 trials |
 | **4** | `cfs_period_us=20000` ISOLADO (override calib `cpus:`) | Burst window 20 ms → smoother throttling | compose-only, complex override | médio | calib 3 trials |
 | **5** | `mlockall()` via JNI (NÃO FFM) | Lock mmap pages contra eviction sob cgroup | JNI 1 file, rebuild | baixo | calib 3 trials |
@@ -247,3 +254,4 @@ Calib rig is a **proxy** for Mac Mini, not a precise simulator. Variance changes
 - **2026-05-21** (segunda edição, post-Onda 15 falsification): Onda 15 (parser `indexKeys` ISOLATED) testada disciplinadamente. G1-G4 todos PASS (semântica correta, E=0 preserved). G5 calib sob host degradado (load 12.15, swap 13 GB) deu median 4584/26.05 ms vs noisy-baseline 4615/24.24 — essentially no-op (strict acceptance criterion 4730 violado). Revert per protocolo. Lever §6.2 (parser indexKeys) movido para FALSIFIED em §3.2; PGO regen ISOLADO promovido para §6.2. Hipótese da falsification: inner-loop overhead em quote position offset early-terminate de findKeyExact original (most keys found near top of body). t2 outlier 5819/1.52 ms registrado mas inconclusive em 3-trial sample sob host ruim.
 - **2026-05-21** (terceira edição, post-Onda 16 falsification): Onda 16 (PGO regen ISOLATED) testada disciplinadamente. Recipe Dockerfile.train + host run + k6 train + SIGTERM funcionou (k6 instr = 6000/0.39ms; iprof 4.1 MB capturada). Native build `:onda16` OK. G5 calib sob host degradado (load 4.96, swap 13 GB): t1=4946/11.31ms (positive signal!) t2=4554/27.87ms t3=4170/67.47ms → median **4554/27.87ms** — REGRESS branch acionado (4554 < 4730). Revert. Lever §6.3 (PGO regen) movido para FALSIFIED em §3.6. Reusable lesson: PGO branch frequencies são determined by INPUT data (k6 seed 4242), não por CPU placement / socket tunings — compose-only changes não motivam PGO regen. NOVA lever §6.7 adicionada: reboot host + retest baseline + retry Onda 15/16 — t1 de ambas as ondas mostrou positive signal que pode ser perdido na noise; vale revalidar sob host limpo. Próximo lever atual: §6.2 = HAProxy `tune.maxaccept=64` ISOLADO (compose-only, sem rebuild, baixo risco).
 - **2026-05-21** (quarta edição, post-Rinha rejection #5854): Submission `351bd71` rejeitada pelo Rinha CI ("using 'sysctls' not allowed (services: api-1, api-2)"). §5 ganhou constraint explícita: `sysctls:` proibido em submission compose. §3.5 atualizada: as Onda 13 sysctls (`somaxconn=1024` + `tcp_fastopen=3`) movidas de WINNERS para "FALSIFIED by Rinha rules" — perf era real, mas não pode shipar. Importante: a medição calib Onda 13 (4836/14.59ms) estava INFLADA pelo sysctls. Submission re-pushed sem sysctls (commit `3d95346`). Próximo preview vai medir o que realmente ship: cpuset puro + KDTREE_MAX_VISITS env + HAProxy splice/tcp-smart-*.
+- **2026-05-21** (quinta edição, post-Onda 17 Mac Mini preview): Onda 17 preview (commit `f84424e`, image `:onda15`) deu final **4006.75 / p99 35.14ms / E=30** vs Onda 12 baseline 4463.64/34.38/E=0 — **regress de −456 final**. 100 % do regress atribuível ao Onda 10 `KDTREE_MAX_VISITS=1500` env var (cap): −447 detection score por 30 weighted errors (FP=12, FN=6), zero p99 ganho. **CRITICAL LESSON**: calib mediu cap como +120 mean (Onda 10 sweep) mas Mac Mini real falsifica. Calib rig satura sob throttle; Mac Mini a quota=1.0 não satura, então benefício de cap (cortar fila de p99) colapsa enquanto custo de accuracy permanece. §3.5: KDTREE_MAX_VISITS=1500 movido para "FALSIFIED by Mac Mini". §5: nova constraint "Calib latency wins must be Mac Mini-validated before shipping accuracy-trading levers". Onda 18 (compose-only, commit `bb499cb` em submission) remove o env var; binary `:onda15` inalterado (cap branch dead-code-eliminada quando env ausente). Próximo preview vai medir o bundle "limpo" [parser + cpuset + haproxy splice + tcp-smart] sem cap — expectativa final ≥ 4463 (baseline recovery) com E=0.
