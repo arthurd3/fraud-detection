@@ -59,6 +59,7 @@ Sorted oldest → newest. *Calib columns are MEDIAN of 3 trials.*
 | Onda 15a | (no commit) | `:onda12` | HAProxy `tune.bufsize=8192` only | 4505 | 31.3ms | — | ✗ no-op/regress in noisy calib |
 | Onda 15 | (revert) | `:onda15` (deleted) | Parser `indexKeys` single-pass ISOLATED (G2 PASS, G3 PASS, G4 unchanged) — first 1-lever discipline test | 4584 | 26.05ms | — | ✗ FALSIFIED isolated (noisy host; t2 outlier 5819/1.52 ms inconclusive) |
 | Onda 16 | (revert) | `:onda16` (deleted) | PGO regen ISOLADO contra Onda 13 source (zero Java change, only `api/default.iprof` replaced); 2nd disciplined 1-lever test | 4554 | 27.87ms | — | ✗ FALSIFIED isolated (noisy host load 4.96 / swap 13 GB; t1 outlier 4946/11.31 ms positive signal but t3 outlier 4170/67.47 ms drags median down) |
+| Onda 17 | TBD | `:onda15` | SHIP parser `indexKeys` (Onda 15 code re-applied) despite calib falsification, per user decision to validate on Mac Mini; stale PGO from Onda 12; G1+G2 PASS (0 div / E=0) | (deferred, host busy) | (deferred) | (pending push) | ⏳ SHIPPED for preview |
 
 ---
 
@@ -84,12 +85,10 @@ For each component: **WINNERS** (kept), **FALSIFIED** (do not repeat), **OPEN** 
 
 **OPEN** (none worth pursuing): floor at ~270 bbf+descend visits is structural for 14-D KD-tree + BBF; further reduction requires either E>0 or architectural change (both blocked by constraints).
 
-### 3.2 JSON parser (~30-40 µs, partially OPEN)
+### 3.2 JSON parser (~30-40 µs, SHIPPED for preview)
 
-**WINNERS**: none yet.
-
-**FALSIFIED**:
-- **Single-pass `indexKeys` per scope** (Onda 15, 2026-05-21, ISOLATED). G2 PASS over 54 100 (E=0 correct), G3 zero-alloc PASS, G4 visits 310 unchanged. Calib 3 trials sob host degradado (load 12.15, swap 13 GB): final 4584.25 / 4448.24 / 5819.18 → median **4584.25 / 26.05 ms**; vs noisy-baseline (Onda 13 rerun mesmo dia) 4615/24.24 → essentially no-op (−31 final, +1.81 ms p99, within ~1400-spread noise). Strict criterion (4584 < 4730) → FALSIFIED + revert. **Hypothesis why**: inner-loop overhead of trying every key at each `"` position offsets the wins of avoiding redundant scans, when most keys are found near the top of the body (original `findKeyExact` early-terminates at first match). Reusable lesson: single-pass vs early-terminate is a coin flip for small key sets; only worth it when keys are deep in body.
+**WINNERS (calib-falsified, Mac-Mini-pending)**:
+- **Single-pass `indexKeys` per scope** (Onda 15 + Onda 17 ship, 2026-05-21). G2 PASS over 54 100 (E=0), G3 zero-alloc, G4 visits 310 unchanged. Calib 3 trials sob host degradado: median **4584/26.05 ms** = FALSIFIED por critério estrito. **MAS** Onda 17 ship per user decision: t1 outlier 5819/1.52 ms (best of life) sugere ganho real perdido em ruído; o Mac Mini limpo é o arbiter. Re-applied via `:onda15` image build, submission compose bumped, awaiting Mac Mini preview ground-truth. Hypothesis-of-falsification preserved: inner-loop overhead of trying every key at each `"` may offset early-terminate wins when keys cluster near body top.
 
 **OPEN** (de-prioritized vs §6):
 - Pre-permute `queryQ16` in parser — KdTree.prepareSearch currently re-permutes; ~50 ns saved (marginal).

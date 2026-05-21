@@ -52,6 +52,14 @@ public class ConnectionState {
     // Onda 3: top-5 ids do HNSW (lazy; zero-alloc após 1ª request; não limpa no reset)
     public int[] knn5;
 
+    // Onda 17 (ships Onda 15 parser code per user decision to validate on Mac Mini):
+    // scratch buffer for FraudRequestParser.indexKeys() — single-pass body scan
+    // that locates up to 5 JSON keys in one sweep. Reused across top-level (5 keys)
+    // and sub-object passes (≤3 keys, top slots used). Pre-allocated once; indexKeys
+    // overwrites every entry per call so no reset needed. G2 ExactAgree proves
+    // semantic equivalence to the previous N-call findKeyExact pattern.
+    public final int[] keyOffsets = new int[5];
+
     public int fraudCount = 0;
 
     // PREPARE STATE TO NEXT REQUEST ( KEEP ALIVE )
