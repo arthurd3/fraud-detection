@@ -92,7 +92,12 @@
                                      alvo; v2 não tem AVX2 e quebraria o Gate A). -->
                                 <buildArg>-march=x86-64-v3</buildArg>
                                 <buildArg>--gc=serial</buildArg>
-                                <buildArg>-R:MaxHeapSize=64m</buildArg>
+                                <!-- Onda 21: heap reservation 64m→48m. Steady-state is
+                                     zero-alloc (AllocCheckKd 0 B/100k since Onda 6); peak
+                                     boot allocation (load .kdt + topBbox/topSlot) <16 MB.
+                                     48m gives >2× headroom. Onda 14 falsified 32m (OOM
+                                     boot). Net cgroup pressure reduction: −16 MB. -->
+                                <buildArg>-R:MaxHeapSize=48m</buildArg>
                                 <buildArg>-H:+ReportExceptionStackTraces</buildArg>
                                 <buildArg>--pgo=default.iprof</buildArg>
                             </buildArgs>

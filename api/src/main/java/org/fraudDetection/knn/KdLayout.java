@@ -5,8 +5,10 @@ package org.fraudDetection.knn;
  * (Onda 7 v2). Ported near-verbatim from jvmoonshot KdTreeLayout, minus the
  * Vector API species (Java 21, scalar only). No mutable state, no env reads.
  *
- * <p>STRIDE=20 short slots per node: dims[0..13] + leftAndDim[14..15] +
- * right[16..17] + fraud[18] + pad[19]. (= jvmoonshot stride-20 packing.)
+ * <p>STRIDE=19 short slots per node: dims[0..13] + leftAndDim[14..15] +
+ * right[16..17] + fraud[18]. RKD6 (Onda 21): pad lane 19 removed (was
+ * unused; written by KdTreeBuilder but never read on the hot path). Saves
+ * 2 B/node × 3 M = −6 MB of mmap pressure under the 159 MiB cgroup.
  */
 public final class KdLayout {
 
@@ -29,8 +31,9 @@ public final class KdLayout {
         for (int d = 0; d < DIMS; d++) INV_PERMUTATION[DIM_PERMUTATION[d]] = d;
     }
 
-    /** short[] stride per node: 14 dims + leftAndDim(2) + right(2) + fraud(1) + pad(1). */
-    public static final int STRIDE = 20;
+    /** short[] stride per node: 14 dims + leftAndDim(2) + right(2) + fraud(1).
+     *  RKD6 (Onda 21): drop lane 19 (was unused PAD). STRIDE 20→19; −6 MB mmap. */
+    public static final int STRIDE = 19;
     /** 16 lo shorts + 16 hi shorts per top-bbox node. */
     public static final int STRIDE_BBOX = 32;
 

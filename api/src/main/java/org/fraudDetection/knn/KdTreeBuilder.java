@@ -32,7 +32,7 @@ public final class KdTreeBuilder {
         short[] srcVecsShort = new short[n * STRIDE];
         for (int i = 0; i < n; i++) {
             int srcBase = i * DIMS;       // semantic, contiguous 14
-            int dstBase = i * STRIDE;     // permuted, stride 20
+            int dstBase = i * STRIDE;     // permuted, stride = KdLayout.STRIDE (19 in RKD6)
             for (int d = 0; d < DIMS; d++) {
                 float v = vecsSemantic[srcBase + dimPerm[d]];
                 srcVecsFloat[dstBase + d] = v;

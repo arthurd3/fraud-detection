@@ -9,15 +9,16 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 /**
- * Persist / reload the EXACT {@link KdTree}. Binary format {@code RKD5}, all
+ * Persist / reload the EXACT {@link KdTree}. Binary format {@code RKD6}, all
  * multi-byte values LITTLE-ENDIAN. Ported from jvmoonshot KdTreeIO.save with
  * the {@code origId} section KEPT (needed for the C origId tie-break); nodes
- * BFS-blocked (RKD4) and {@code origId} packed uint24 (RKD5).
+ * BFS-blocked (RKD4), {@code origId} packed uint24 (RKD5), pad lane dropped
+ * (RKD6 / Onda 21 → STRIDE 20→19, −6 MB mmap pressure under 159 MiB cgroup).
  *
  * <pre>
- *   header : "RKD5"(4) + ver i32(=5) + n i32 + dims i32(=14) + stride i32(=20) + root i32(=0)
- *   pts    : short[n*20]                (14 permuted dims + leftAndDim + right + fraud + pad)
- *   origId : uint24[n] LE               (ids < 3M < 2^24, lossless; was int32 ≤ RKD4)
+ *   header : "RKD6"(4) + ver i32(=6) + n i32 + dims i32(=14) + stride i32(=19) + root i32(=0)
+ *   pts    : short[n*19]                (14 permuted dims + leftAndDim + right + fraud)
+ *   origId : uint24[n] LE               (ids < 3M < 2^24, lossless; kept from RKD5)
  *   meta   : topNodeCount i32
  *   topBbox: short[topNodeCount*32]
  *   topSlot: int32[n]
@@ -31,12 +32,15 @@ import java.nio.file.StandardOpenOption;
  */
 public final class KdTreeIO {
 
-    // RKD5 (Onda 8 Fase 2b): RKD4 (BFS-blocked nodes) + `origId` packed uint24
-    // LE (ids < 3M < 2^24, lossless) instead of int32 → −3 MB mmap footprint
-    // (less page-cache pressure under the 350 MB cgroup). Bumping magic+ver
-    // invalidates any RKD3/RKD4 .kdt so Prebuild regenerates it.
-    static final byte[] MAGIC = {'R', 'K', 'D', '5'};
-    static final int VERSION = 5;
+    // RKD6 (Onda 21): RKD5 with the unused PAD lane (19) dropped — STRIDE 20→19
+    // ⇒ −6 MB mmap (114 MB pts vs 120 MB). Direct attack on hypothesis 2 of the
+    // Onda 20 diagnostic (mmap eviction under 159 MiB cgroup contributing 25-30 ms
+    // of the 35 ms p99 tail). Lossless: pad was written by KdTreeBuilder but never
+    // read on the hot path (only LANE_LEFT_DIM=14 / LANE_RIGHT=16 / LANE_FRAUD=18
+    // are consumed). Bumping magic+ver invalidates any RKD3/RKD4/RKD5 .kdt so
+    // Prebuild regenerates it under the new STRIDE on next boot/test.
+    static final byte[] MAGIC = {'R', 'K', 'D', '6'};
+    static final int VERSION = 6;
     private static final int HEADER_BYTES = 4 + 5 * 4; // magic + ver,n,dims,stride,root
     private static final int IO_CHUNK = 8 * 1024 * 1024;
 
@@ -95,10 +99,10 @@ public final class KdTreeIO {
     }
 
     /**
-     * Production loader: mmap {@code pts} (n*20*2 bytes) and {@code origId}
-     * (n*4 bytes) off the JVM heap; topSlot/topBbox on-heap. All reads are
-     * absolute little-endian via {@link MappedByteBuffer} (Java 21 portable,
-     * no FFM / no Unsafe).
+     * Production loader: mmap {@code pts} (n*STRIDE*2 bytes; STRIDE=19 in RKD6)
+     * and {@code origId} (n*3 bytes, packed uint24) off the JVM heap; topSlot/
+     * topBbox on-heap. All reads are absolute little-endian via
+     * {@link MappedByteBuffer} (Java 21 portable, no FFM / no Unsafe).
      */
     public static KdTree loadMmap(Path file) throws IOException {
         try (FileChannel ch = FileChannel.open(file, StandardOpenOption.READ)) {
@@ -130,7 +134,7 @@ public final class KdTreeIO {
         }
     }
 
-    /** True if {@code file} is a valid RKD3 for exactly {@code expectN} nodes. */
+    /** True if {@code file} is a valid RKD6 for exactly {@code expectN} nodes. */
     public static boolean isValid(Path file, int expectN) {
         try (FileChannel ch = FileChannel.open(file, StandardOpenOption.READ)) {
             return readAndCheckHeader(ch) == expectN;
@@ -147,7 +151,7 @@ public final class KdTreeIO {
         hdr.get(magic);
         if (magic[0] != MAGIC[0] || magic[1] != MAGIC[1]
                 || magic[2] != MAGIC[2] || magic[3] != MAGIC[3])
-            throw new IOException("bad magic (expected RKD5)");
+            throw new IOException("bad magic (expected RKD6)");
         int ver = hdr.getInt();
         int n = hdr.getInt();
         int dims = hdr.getInt();
