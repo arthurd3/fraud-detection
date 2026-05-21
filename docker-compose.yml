@@ -18,9 +18,6 @@ services:
       - KDTREE_MAX_VISITS=1500
     networks: [app]
     cpuset: "1"
-    sysctls:
-      - net.core.somaxconn=1024
-      - net.ipv4.tcp_fastopen=3
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
@@ -30,9 +27,6 @@ services:
       - KDTREE_MAX_VISITS=1500
     networks: [app]
     cpuset: "2"
-    sysctls:
-      - net.core.somaxconn=1024
-      - net.ipv4.tcp_fastopen=3
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
