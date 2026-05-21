@@ -8,6 +8,12 @@ services:
       - "9999:9999"
     depends_on: [api-1, api-2]
     networks: [app]
+    # Onda 13 Phase B — cpuset pins haproxy to logical CPU 0 (mirrors what we
+    # want on the Mac Mini 4-core host: one core for the LB, one for each api,
+    # one for OS). Pinning eliminates kernel scheduler migrations across cores,
+    # avoiding TLB flushes and L1/L2 cache invalidations on every context
+    # switch — measurable benefit when each container is single-threaded.
+    cpuset: "0"
     deploy:
       resources:
         limits: { cpus: "0.15", memory: "32M" }
@@ -24,6 +30,13 @@ services:
     environment:
       - KDTREE_MAX_VISITS=1500
     networks: [app]
+    # Onda 13 Phase B — pin api-1 to CPU 1. See haproxy comment.
+    cpuset: "1"
+    # Onda 13 Phase C — raise the listen backlog (net.core.somaxconn) so burst
+    # accepts don't drop, enable TCP Fast Open both as server and client.
+    sysctls:
+      - net.core.somaxconn=1024
+      - net.ipv4.tcp_fastopen=3
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
@@ -32,6 +45,10 @@ services:
     environment:
       - KDTREE_MAX_VISITS=1500
     networks: [app]
+    cpuset: "2"
+    sysctls:
+      - net.core.somaxconn=1024
+      - net.ipv4.tcp_fastopen=3
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
