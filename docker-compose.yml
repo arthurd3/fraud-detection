@@ -13,7 +13,7 @@ services:
       resources:
         limits: { cpus: "0.15", memory: "32M" }
   api-1:
-    image: docker.io/arthurd3/rinha-fraud:onda12
+    image: docker.io/arthurd3/rinha-fraud:onda15
     environment:
       - KDTREE_MAX_VISITS=1500
     networks: [app]
@@ -22,7 +22,7 @@ services:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
   api-2:
-    image: docker.io/arthurd3/rinha-fraud:onda12
+    image: docker.io/arthurd3/rinha-fraud:onda15
     environment:
       - KDTREE_MAX_VISITS=1500
     networks: [app]
