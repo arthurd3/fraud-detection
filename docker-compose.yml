@@ -16,8 +16,6 @@ services:
     image: docker.io/arthurd3/rinha-fraud:onda22
     networks: [app]
     cpuset: "1"
-    cpu_period: 20000
-    cpu_quota: 8500
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
@@ -25,8 +23,6 @@ services:
     image: docker.io/arthurd3/rinha-fraud:onda22
     networks: [app]
     cpuset: "2"
-    cpu_period: 20000
-    cpu_quota: 8500
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
