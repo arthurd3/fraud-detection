@@ -13,7 +13,7 @@ services:
       resources:
         limits: { cpus: "0.15", memory: "32M" }
   api-1:
-    image: docker.io/arthurd3/rinha-fraud:onda15
+    image: docker.io/arthurd3/rinha-fraud:onda22
     networks: [app]
     cpuset: "1"
     cpu_period: 20000
@@ -22,7 +22,7 @@ services:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
   api-2:
-    image: docker.io/arthurd3/rinha-fraud:onda15
+    image: docker.io/arthurd3/rinha-fraud:onda22
     networks: [app]
     cpuset: "2"
     cpu_period: 20000
