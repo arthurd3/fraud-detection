@@ -56,10 +56,11 @@ final class KdScratch {
      * dominates the ~1e-14 round-off slack), so it cannot displace the exact double
      * top-5. Empirically proven by {@code ExactAgree} 0 / 54 100 mismatches.
      *
-     * <p><b>Footprint</b>: {@code int[POOL_CAP] = 256 KB} per scratch. One instance per
-     * JVM (single-threaded NIO reactor) — flat 256 KB constant. Only the first
-     * {@code poolSize} entries (mean 40, max 76 observed Onda 22 Fase 1) are written/read
-     * per query, so the warm working set is L1-resident.
+     * <p><b>Footprint</b>: {@code int[POOL_CAP] = 4 KB} per scratch (Onda 22 K2,
+     * 2026-05-22; was 256 KB pre-shrink — see {@link #POOL_CAP} doc). One instance
+     * per JVM (single-threaded NIO reactor). Only the first {@code poolSize} entries
+     * (mean 40, max 76 observed Onda 22 Fase 1, re-confirmed 76/cap-1024 pre-K2)
+     * are written/read per query, so the warm working set is L1-resident.
      */
     final int[] poolI16Sum = new int[POOL_CAP];
 
@@ -89,10 +90,20 @@ final class KdScratch {
      * Candidate pool for the EXACT double rerank: every node whose i16 squared
      * sum was ≤ the running TopK-5th sum (or while TopK not yet full). Proven
      * superset of C's double-distance top-5 (the i16-5th double bound argument).
-     * Capacity is generous; overflow is impossible in practice for n=3M (tracked
-     * by {@link #maxPool} for the gate) but guarded defensively.
+     * Overflow is impossible in practice for n=3M (tracked by {@link #maxPool}
+     * for the {@code ExactAgree} gate) but guarded defensively in
+     * {@code KdTree#poolRecord}.
+     *
+     * <p>Onda 22 K2 (2026-05-22): cap shrunk {@code 1<<16} → {@code 1<<10} = 1024
+     * (13× headroom over observed max 76 across 54.100 entries, ExactAgree
+     * re-run pre-shrink confirmed). Drops the three parallel arrays
+     * ({@link #poolI16Sum} / {@link #poolTreeIdx} / {@link #poolOrig})
+     * from 3×256 = 768 KB down to 3×4 = 12 KB total — fits L1d on Haswell
+     * (32 KB). Pre-K2 {@code poolI16Sum} alone (256 KB) coincided exactly with
+     * the Haswell L2 (256 KiB), suspected of conflict miss in the hot rerank
+     * loop (Mac Mini p99 35–40 ms cauda).
      */
-    static final int POOL_CAP = 1 << 16;
+    static final int POOL_CAP = 1 << 10;
     final int[] poolTreeIdx = new int[POOL_CAP];
     final int[] poolOrig = new int[POOL_CAP]; // parallel: origId of poolTreeIdx[i]
     int poolSize;
