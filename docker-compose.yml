@@ -13,14 +13,14 @@ services:
       resources:
         limits: { cpus: "0.15", memory: "32M" }
   api-1:
-    image: docker.io/arthurd3/rinha-fraud:k7-test
+    image: docker.io/arthurd3/rinha-fraud:k2-test
     networks: [app]
     cpuset: "1"
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "159M" }
   api-2:
-    image: docker.io/arthurd3/rinha-fraud:k7-test
+    image: docker.io/arthurd3/rinha-fraud:k2-test
     networks: [app]
     cpuset: "2"
     deploy:
