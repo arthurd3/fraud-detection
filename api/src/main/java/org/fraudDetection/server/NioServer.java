@@ -64,7 +64,15 @@ public class NioServer {
                 }
             }
 
-            selector.select();
+            // Onda 32 (p99, padrão jvmoonshot): poll não-bloqueante primeiro — quando
+            // os bytes da próxima request keep-alive já estão no buffer do socket (comum
+            // sob carga) processamos sem o syscall epoll_wait. Só bloqueia em select()
+            // quando nada está pronto E nada pendente (sem busy-spin — injectChannel faz
+            // wakeup() sticky, então não há lost-wakeup).
+            int ready = selector.selectNow();
+            if (ready == 0 && pending.isEmpty()) {
+                selector.select();
+            }
 
             Iterator<SelectionKey> it = selector.selectedKeys().iterator();
             while (it.hasNext()) {
