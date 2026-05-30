@@ -8,33 +8,25 @@ services:
       - "9999:9999"
     depends_on: [api-1, api-2]
     networks: [app]
-    # Onda 13 — cpuset pin haproxy → CPU 0 (api-1 no 1, api-2 no 2, OS no 3);
-    # elimina migrações do scheduler (TLB/L1/L2 flush) com containers single-thread.
+    # Onda 13 — cpuset pin haproxy → CPU 0 (api-1 no 1, api-2 no 2, OS no 3).
     cpuset: "0"
-    # Onda 19 — CFS period 20ms (era 100ms default). 3000/20000 = 0.15 efetivo.
-    # `cpus:` removido do deploy.limits p/ evitar o conflito do daemon
-    # "Nano CPUs and CPU Period cannot both be set" (vide submission 63397c5).
-    cpu_period: 20000
-    cpu_quota: 3000
     deploy:
       resources:
-        limits: { memory: "32M" }
+        limits: { cpus: "0.15", memory: "32M" }
   api-1:
     # :k2-test = binário Onda 22 K2 (poolI16Sum POOL_CAP 1<<16→1<<10, fit L2 Haswell).
     image: docker.io/arthurd3/rinha-fraud:k2-test
     networks: [app]
-    # Onda 13 — pin api-1 → CPU 1.
     cpuset: "1"
-    # sysctls SÓ no main (calib local). PROIBIDO na submission (Rinha rejection #5854).
+    # sysctls SÓ no main (calib local). PROIBIDO na submission (Rinha #5854).
+    # NB: Onda 19 (cpu_period) REVERTIDA — preview #7335 exige cpus: por service
+    # (≠ auto-merge CI); cpus:+cpu_period conflitam no daemon. Ver ledger 14ª ed.
     sysctls:
       - net.core.somaxconn=1024
       - net.ipv4.tcp_fastopen=3
-    # Onda 19 — 8500/20000 = 0.425 efetivo (mesmo budget; só muda granularidade do CFS).
-    cpu_period: 20000
-    cpu_quota: 8500
     deploy:
       resources:
-        limits: { memory: "159M" }
+        limits: { cpus: "0.425", memory: "159M" }
   api-2:
     image: docker.io/arthurd3/rinha-fraud:k2-test
     networks: [app]
@@ -42,11 +34,9 @@ services:
     sysctls:
       - net.core.somaxconn=1024
       - net.ipv4.tcp_fastopen=3
-    cpu_period: 20000
-    cpu_quota: 8500
     deploy:
       resources:
-        limits: { memory: "159M" }
+        limits: { cpus: "0.425", memory: "159M" }
 networks:
   app:
     driver: bridge
