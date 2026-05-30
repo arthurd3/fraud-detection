@@ -1,0 +1,11 @@
+# ---- builder: forwarder L4 Rust (lapada) ----
+FROM rust:1-slim AS build
+WORKDIR /src
+COPY lapada/ ./lapada/
+RUN cd lapada && cargo build --release
+
+# ---- runtime: distroless glibc + binário minúsculo ----
+FROM gcr.io/distroless/cc-debian12 AS runtime
+COPY --from=build /src/lapada/target/release/lapada /lapada
+EXPOSE 9999
+ENTRYPOINT ["/lapada"]
