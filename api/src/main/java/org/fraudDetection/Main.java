@@ -1,6 +1,7 @@
 package org.fraudDetection;
 
 import org.fraudDetection.knn.KdTree;
+import org.fraudDetection.server.FdReceiver;
 import org.fraudDetection.server.NioServer;
 
 public class Main {
@@ -11,20 +12,35 @@ public class Main {
     }
     public static void main(String[] args) throws Exception {
         String d = dataPath();
-        // FASE 0 (link-proof, TEMPORÁRIO): prova que o staticlib Rust linka e
-        // roda no binário native-image de PRODUÇÃO. Removido na Fase 1.
-        int ping = org.fraudDetection.rust.RustSearch.fdPing(2, 3);
-        System.out.println("FASE0 fd_ping(2,3)=" + ping);
-        if (ping != 5) { System.err.println("FASE0 FAIL"); System.exit(3); }
-        System.out.println("FASE0 OK");
         long t0 = System.currentTimeMillis();
-        // Onda 7 v2: EXACT KD-tree (RKD3) mmap. Replaces the legacy int8
-        // MmapDataset + HNSW load — the fraud decision is now byte-identical
-        // to the official ground truth.
+        // Onda 7 v2: EXACT KD-tree (RKD6) mmap. Decisão de fraude byte-idêntica
+        // ao ground truth oficial. INALTERADO no modo lapada (E=0 preservado).
         KdTree.load(d + "/references.kdt");
         System.out.println("kdtree loaded: " + KdTree.INSTANCE.size()
                 + " nós (" + (System.currentTimeMillis() - t0) + " ms)");
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 9999;
-        new NioServer(port).start();
+
+        String fdSock = System.getenv("FD_SOCKET");
+        if (fdSock != null && !fdSock.isEmpty()) {
+            // ===== Modo lapada (FD-passing) =====
+            // O lapada (forwarder L4 Rust) aceita o TCP :9999 e passa o fd do
+            // cliente via SCM_RIGHTS pro Unix socket $FD_SOCKET. A API recebe o
+            // fd (fd_next_client @CFunction), embrulha em SocketChannel (FdWrap)
+            // e serve a request — o NioServer/parse/busca/keep-alive não mudam.
+            int rc = org.fraudDetection.rust.RustSearch.fdListenerInit();
+            if (rc != 0) {
+                System.err.println("fd_listener_init falhou rc=" + rc + " (FD_SOCKET=" + fdSock + ")");
+                System.exit(4);
+            }
+            System.out.println("api: modo lapada FD_SOCKET=" + fdSock);
+            NioServer server = new NioServer(port);
+            Thread recv = new Thread(new FdReceiver(server), "fd-receiver");
+            recv.setDaemon(false);
+            recv.start();
+            server.startLapadaMode();
+        } else {
+            // ===== Modo TCP (fallback/local sem lapada) =====
+            new NioServer(port).start();
+        }
     }
 }

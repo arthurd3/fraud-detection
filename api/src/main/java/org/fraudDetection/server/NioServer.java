@@ -8,6 +8,7 @@ import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.Iterator;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 
 public class NioServer {
@@ -17,32 +18,59 @@ public class NioServer {
     private static final byte[] PATH_READY = {'/','r','e','a','d','y'};
     private static final byte[] PATH_FRAUD = {'/','f','r','a','u','d','-','s','c','o','r','e'};
 
+    // Modo lapada: canais (fds embrulhados pelo FdReceiver noutra thread) a
+    // registrar no Selector. Thread-safe; drenado no início de cada iteração.
+    private final ConcurrentLinkedQueue<SocketChannel> pending = new ConcurrentLinkedQueue<>();
+
     public NioServer(int port) {
         this.port = port;
     }
 
+    /** Modo TCP (fallback/local sem lapada): a própria API aceita conexões em :port. */
     public void start() throws IOException {
-        // SELECTOR - BLOCK WAITING I/O EVENTS
         selector = Selector.open();
-
-        // LISTENING SOCKET
         serverChannel = ServerSocketChannel.open();
         serverChannel.bind(new InetSocketAddress(port));
-        serverChannel.configureBlocking(false); // binding after config non-blocking
-        serverChannel.register(selector, SelectionKey.OP_ACCEPT); // REGISTER ON SELECTOR
-
+        serverChannel.configureBlocking(false);
+        serverChannel.register(selector, SelectionKey.OP_ACCEPT);
         System.out.println("api: Listening on port " + port);
+        reactorLoop();
+    }
 
-        // Infinite loop reactor
-        while(true){
+    /** Modo lapada (FD-passing): sem listener TCP; serve fds injetados pelo FdReceiver. */
+    public void startLapadaMode() throws IOException {
+        selector = Selector.open();
+        System.out.println("api: modo lapada (FD-passing) — sem listener TCP");
+        reactorLoop();
+    }
+
+    /** Chamado pelo FdReceiver (outra thread): enfileira o canal + acorda o selector. */
+    public void injectChannel(SocketChannel ch) {
+        pending.add(ch);
+        selector.wakeup();
+    }
+
+    // Reactor single-thread (idêntico ao loop antigo) + dreno dos canais injetados.
+    private void reactorLoop() throws IOException {
+        while (true) {
+            // Drena fds injetados (modo lapada) ANTES de bloquear no select.
+            SocketChannel inj;
+            while ((inj = pending.poll()) != null) {
+                try {
+                    inj.configureBlocking(false);
+                    inj.register(selector, SelectionKey.OP_READ, new ConnectionState());
+                } catch (IOException ex) {
+                    try { inj.close(); } catch (IOException ignored) {}
+                }
+            }
 
             selector.select();
 
             Iterator<SelectionKey> it = selector.selectedKeys().iterator();
-            while(it.hasNext()){
+            while (it.hasNext()) {
                 SelectionKey key = it.next();
                 it.remove();
-                if(!key.isValid()) continue;
+                if (!key.isValid()) continue;
 
                 try {
                     if (key.isAcceptable())       accept(key);
@@ -52,7 +80,6 @@ public class NioServer {
                     key.cancel();
                     try { key.channel().close(); } catch (IOException ignored) {}
                 }
-
             }
         }
     }
@@ -62,16 +89,10 @@ public class NioServer {
         if (socketChannel == null) return;   // defesa contra spurious wakeup do selector
         socketChannel.configureBlocking(false);
 
-        // Onda 12 Phase C — TCP_NODELAY explicit on accepted sockets. Java NIO
-        // does not disable Nagle's algorithm by default; modern Linux usually
-        // auto-disables it for small writes, but explicit guards the worst-case
-        // ~200 µs delay on the canned-response write path that follows every
-        // request. Cost: zero (one setsockopt() per accept, not per request).
+        // Onda 12 Phase C — TCP_NODELAY explicit on accepted sockets.
         socketChannel.setOption(StandardSocketOptions.TCP_NODELAY, Boolean.TRUE);
 
-        // Connection State via TCP CONNECTION - REUSED FOR ALL CONN REQUESTS
         ConnectionState state = new ConnectionState();
-
         socketChannel.register(selector, SelectionKey.OP_READ, state);
     }
 

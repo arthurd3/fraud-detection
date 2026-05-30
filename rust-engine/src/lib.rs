@@ -3,6 +3,7 @@
 //! (spike do recvmsg(SCM_RIGHTS) no native-image).
 use std::os::raw::c_int;
 use libc::c_void;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 #[no_mangle]
 pub extern "C" fn fd_ping(a: i32, b: i32) -> i32 {
@@ -87,6 +88,90 @@ pub extern "C" fn fd_socketpair(out: *mut i32) -> i32 {
         *out.add(0) = sv[0];
         *out.add(1) = sv[1];
         0
+    }
+}
+
+// ===== Fase 2: receiver da API (lapada conecta neste Unix socket) =====
+static LISTENER_FD: AtomicI32 = AtomicI32::new(-1);
+static CTRL_FD: AtomicI32 = AtomicI32::new(-1);
+
+/// Cria+bind+listen o Unix socket em $FD_SOCKET (lido do env). Chamado 1× no boot.
+/// Retorna 0=ok; <0=erro (-2 sem FD_SOCKET).
+#[no_mangle]
+pub extern "C" fn fd_listener_init() -> i32 {
+    let path = match std::env::var("FD_SOCKET") {
+        Ok(p) if !p.is_empty() => p,
+        _ => return -2,
+    };
+    let c_path = match std::ffi::CString::new(path.as_bytes()) {
+        Ok(c) => c,
+        Err(_) => return -3,
+    };
+    let bytes = c_path.as_bytes();
+    unsafe {
+        let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+        if fd < 0 {
+            return -1;
+        }
+        let mut addr: libc::sockaddr_un = std::mem::zeroed();
+        addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        if bytes.len() >= addr.sun_path.len() {
+            libc::close(fd);
+            return -4;
+        }
+        libc::unlink(c_path.as_ptr());
+        for (i, &b) in bytes.iter().enumerate() {
+            addr.sun_path[i] = b as libc::c_char;
+        }
+        let len = (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1) as libc::socklen_t;
+        if libc::bind(
+            fd,
+            &addr as *const libc::sockaddr_un as *const libc::sockaddr,
+            len,
+        ) != 0
+        {
+            libc::close(fd);
+            return -5;
+        }
+        libc::chmod(c_path.as_ptr(), 0o666);
+        if libc::listen(fd, 128) != 0 {
+            libc::close(fd);
+            return -6;
+        }
+        LISTENER_FD.store(fd, Ordering::Relaxed);
+        0
+    }
+}
+
+/// Bloqueante: aceita a conn de controle do lapada (reconecta se cair) e
+/// recvmsg 1 fd de cliente. Retorna client_fd (≥0) ou -1.
+#[no_mangle]
+pub extern "C" fn fd_next_client() -> i32 {
+    loop {
+        let mut c = CTRL_FD.load(Ordering::Relaxed);
+        if c < 0 {
+            let listener = LISTENER_FD.load(Ordering::Relaxed);
+            if listener < 0 {
+                return -1;
+            }
+            c = unsafe { libc::accept(listener, std::ptr::null_mut(), std::ptr::null_mut()) };
+            if c < 0 {
+                if unsafe { *libc::__errno_location() } == libc::EINTR {
+                    continue;
+                }
+                return -1;
+            }
+            CTRL_FD.store(c, Ordering::Relaxed);
+        }
+        let fd = fd_recv(c);
+        if fd >= 0 {
+            return fd;
+        }
+        // conn de controle caiu → fecha e reaceita a próxima
+        unsafe {
+            libc::close(c);
+        }
+        CTRL_FD.store(-1, Ordering::Relaxed);
     }
 }
 
