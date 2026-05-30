@@ -21,7 +21,7 @@ services:
       resources:
         limits: { cpus: "0.15", memory: "16M" }
   api-1:
-    image: docker.io/arthurd3/rinha-fraud:lapada-api-inline
+    image: docker.io/arthurd3/rinha-fraud:lapada-api-mlock
     environment:
       - FD_SOCKET=/sockets/api1.sock
       - DATA_PATH=/data
@@ -29,11 +29,13 @@ services:
       - sockets:/sockets
     networks: [app]
     cpuset: "1"
+    ulimits:
+      memlock: -1
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "167M" }
   api-2:
-    image: docker.io/arthurd3/rinha-fraud:lapada-api-inline
+    image: docker.io/arthurd3/rinha-fraud:lapada-api-mlock
     environment:
       - FD_SOCKET=/sockets/api2.sock
       - DATA_PATH=/data
@@ -41,6 +43,8 @@ services:
       - sockets:/sockets
     networks: [app]
     cpuset: "2"
+    ulimits:
+      memlock: -1
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "167M" }
