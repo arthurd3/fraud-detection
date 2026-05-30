@@ -175,6 +175,43 @@ pub extern "C" fn fd_next_client() -> i32 {
     }
 }
 
+// ===== p99 lever (Onda 32): mlock do índice mmap'd da KD-tree =====
+// Best-effort. Pina exatamente as páginas do índice (já residentes via
+// MappedByteBuffer.load() no boot) p/ o kernel não evictá-las sob pressão de
+// memória do cgroup — mata a cauda de major-fault do p99. Toca zero
+// compute/bytes => E=0 inalterado.
+
+/// Eleva o RLIMIT_MEMLOCK deste processo p/ infinito (best-effort).
+/// 0=ok, -1=falha (o caller segue: mlock pode funcionar se o hard limit já é
+/// alto, ou falhar graciosamente).
+#[no_mangle]
+pub extern "C" fn fd_raise_memlock_rlimit() -> i32 {
+    unsafe {
+        let lim = libc::rlimit {
+            rlim_cur: libc::RLIM_INFINITY,
+            rlim_max: libc::RLIM_INFINITY,
+        };
+        if libc::setrlimit(libc::RLIMIT_MEMLOCK, &lim) == 0 { 0 } else { -1 }
+    }
+}
+
+/// mlock(addr,len) numa região que a JVM já mapeou e faultou. As páginas estão
+/// residentes, então isto só liga o bit "locked" — sem RSS extra, só impede
+/// eviction. 0=ok, senão -errno.
+#[no_mangle]
+pub extern "C" fn fd_mlock_region(addr: i64, len: i64) -> i32 {
+    if addr == 0 || len <= 0 {
+        return -1;
+    }
+    unsafe {
+        if libc::mlock(addr as usize as *const c_void, len as usize) == 0 {
+            0
+        } else {
+            -(*libc::__errno_location())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

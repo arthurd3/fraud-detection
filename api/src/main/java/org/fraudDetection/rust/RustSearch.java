@@ -17,5 +17,13 @@ public final class RustSearch {
     @CFunction("fd_next_client")
     public static native int fdNextClient();
 
+    /** Onda 32: eleva RLIMIT_MEMLOCK p/ infinito (best-effort). 0=ok, -1=falha. */
+    @CFunction("fd_raise_memlock_rlimit")
+    public static native int fdRaiseMemlockRlimit();
+
+    /** Onda 32: mlock(addr,len) numa região mmap'd já residente. 0=ok, -errno=falha. */
+    @CFunction("fd_mlock_region")
+    public static native int fdMlockRegion(long addr, long len);
+
     private RustSearch() {}
 }

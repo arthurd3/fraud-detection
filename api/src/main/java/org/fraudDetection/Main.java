@@ -18,6 +18,9 @@ public class Main {
         KdTree.load(d + "/references.kdt");
         System.out.println("kdtree loaded: " + KdTree.INSTANCE.size()
                 + " nós (" + (System.currentTimeMillis() - t0) + " ms)");
+        // Onda 32 (p99): pina o índice mmap'd p/ matar a cauda de page-fault
+        // (best-effort; no-op em heap mode; E=0 intacto). Após KdTree.load.
+        KdTree.INSTANCE.mlockIndex();
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 9999;
 
         String fdSock = System.getenv("FD_SOCKET");

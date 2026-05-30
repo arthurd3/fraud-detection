@@ -30,6 +30,8 @@ services:
       - sockets:/sockets
     networks: [app]
     cpuset: "1"
+    ulimits:
+      memlock: -1
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "167M" }
@@ -42,6 +44,8 @@ services:
       - sockets:/sockets
     networks: [app]
     cpuset: "2"
+    ulimits:
+      memlock: -1
     deploy:
       resources:
         limits: { cpus: "0.425", memory: "167M" }

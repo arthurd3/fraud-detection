@@ -7,4 +7,6 @@ int32_t fd_send(int32_t ctrl_fd, int32_t fd_to_send);
 int32_t fd_socketpair(int32_t* out);
 int32_t fd_listener_init(void);
 int32_t fd_next_client(void);
+int32_t fd_raise_memlock_rlimit(void);
+int32_t fd_mlock_region(int64_t addr, int64_t len);
 #endif

@@ -3,5 +3,6 @@
     "allDeclaredConstructors": true, "allDeclaredMethods": true },
   { "name": "sun.nio.ch.SelChImpl", "allDeclaredMethods": true },
   { "name": "java.io.FileDescriptor",
-    "fields": [ { "name": "fd" } ], "allDeclaredConstructors": true }
+    "fields": [ { "name": "fd" } ], "allDeclaredConstructors": true },
+  { "name": "sun.nio.ch.DirectBuffer", "allDeclaredMethods": true }
 ]

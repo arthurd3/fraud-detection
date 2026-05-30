@@ -191,6 +191,38 @@ public final class KdTree {
         }
     }
 
+    /**
+     * Onda 32 (p99): mlock da região mmap'd `pts` (~108.7 MiB) do índice p/ o
+     * kernel não evictá-la sob pressão de memória do HOST (o índice vive no page
+     * cache do host, não no cgroup — file_mapped=0; a cauda de major-fault vem da
+     * eviction host-level sob carga: 2 api + lapada + k6 + SO). `pts` é o buffer
+     * QUENTE (lido ~310×/query); `origId` (~8.6 MiB, lido ~5×/query) é deixado de
+     * fora DE PROPÓSITO: anon(49)+pts(108.7)+origId(8.6)=166.5 MiB encostaria no
+     * cap de 167 MiB (margem 0.5 MiB → OOM); só pts deixa ~9 MiB de folga.
+     * Best-effort: qualquer falha (ENOMEM/EPERM/sem mmap) é logada e ignorada
+     * (status quo). Toca zero compute/bytes => E=0 intacto. Rodar APÓS
+     * {@link #applyMmapHints()} (páginas já residentes).
+     */
+    public void mlockIndex() {
+        if (ptsBuf == null) { System.out.println("mlockIndex: heap mode, skip"); return; }
+        org.fraudDetection.rust.RustSearch.fdRaiseMemlockRlimit();   // best-effort
+        lockOne("pts", ptsBuf);
+        // origId deixado reclaimável de propósito (margem do cap de 167 MiB).
+    }
+
+    private static void lockOne(String tag, java.nio.MappedByteBuffer buf) {
+        if (buf == null) return;
+        try {
+            long addr = org.fraudDetection.rust.BufferAddr.addressOf(buf);
+            long len  = buf.capacity();
+            int rc = org.fraudDetection.rust.RustSearch.fdMlockRegion(addr, len);
+            if (rc == 0) System.out.println("mlockIndex: locked " + tag + " " + len + " B");
+            else System.err.println("mlockIndex: " + tag + " mlock failed rc=" + rc + " (continuing)");
+        } catch (Throwable t) {
+            System.err.println("mlockIndex: " + tag + " reflect failed: " + t + " (continuing)");
+        }
+    }
+
     // Gate accessors (ExactAgree).
     public int lastMaxHeap() { return scratch.maxHeap; }
     public int lastMaxPool() { return scratch.maxPool; }
