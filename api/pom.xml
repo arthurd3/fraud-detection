@@ -101,6 +101,14 @@
                                      /src/api/clib antes do mvnw. -->
                                 <buildArg>-H:CLibraryPath=/src/api/clib</buildArg>
                                 <buildArg>-H:CCompilerOption=-I/src/api/clib</buildArg>
+                                <!-- Rust port Fase 0.5/2 (modo lapada): FdWrap embrulha o fd
+                                     cru em SocketChannel via reflection em sun.nio.ch (Plano A,
+                                     validado G0.5). O reflect-config.json em
+                                     resources/META-INF/native-image é auto-detectado pelo
+                                     plugin; os flags add-opens abaixo liberam o
+                                     privateLookupIn no runtime (igual ao spike Fase 0.5). -->
+                                <buildArg>-J--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</buildArg>
+                                <buildArg>-J--add-opens=java.base/java.io=ALL-UNNAMED</buildArg>
                                 <buildArg>-O3</buildArg>
                                 <!-- alvo = Mac Mini Late-2014 Haswell/AVX2 (RINHA_PLAN
                                      §1.7) => x86-64-v3 (NÃO -march=native: builder ≠

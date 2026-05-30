@@ -1,42 +1,52 @@
 name: rinha-fraud
+# Arquitetura lapada (FD-passing): lapada (Rust) aceita o TCP :9999 e passa o fd
+# do cliente via SCM_RIGHTS pras 2 APIs (Unix sockets no volume `sockets`). A API
+# (GraalVM native-image, busca KD-tree INALTERADA = E=0) recebe o fd e serve nele.
+# Substitui o HAProxy: footprint menor (lapada ~MBs vs 32MB) + I/O off-data-path.
 services:
-  haproxy:
-    image: haproxy:3.0-alpine
-    volumes:
-      - ./docker/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+  lapada:
+    build: { context: ., dockerfile: Dockerfile.lapada }
+    image: rinha-fraud-lapada:dev
+    environment:
+      - FD_UPSTREAMS=/sockets/api1.sock,/sockets/api2.sock
+      - LAPADA_LISTEN=0.0.0.0:9999
     ports:
       - "9999:9999"
+    volumes:
+      - sockets:/sockets
     depends_on: [api-1, api-2]
     networks: [app]
-    # Onda 13 — cpuset pin haproxy → CPU 0 (api-1 no 1, api-2 no 2, OS no 3).
     cpuset: "0"
     deploy:
       resources:
-        limits: { cpus: "0.15", memory: "32M" }
+        limits: { cpus: "0.15", memory: "16M" }
   api-1:
-    # :k2-test = binário Onda 22 K2 (poolI16Sum POOL_CAP 1<<16→1<<10, fit L2 Haswell).
-    image: docker.io/arthurd3/rinha-fraud:k2-test
+    build: { context: ., dockerfile: Dockerfile }
+    image: rinha-fraud-api:dev
+    environment:
+      - FD_SOCKET=/sockets/api1.sock
+      - DATA_PATH=/data
+    volumes:
+      - sockets:/sockets
     networks: [app]
     cpuset: "1"
-    # sysctls SÓ no main (calib local). PROIBIDO na submission (Rinha #5854).
-    # NB: Onda 19 (cpu_period) REVERTIDA — preview #7335 exige cpus: por service
-    # (≠ auto-merge CI); cpus:+cpu_period conflitam no daemon. Ver ledger 14ª ed.
-    sysctls:
-      - net.core.somaxconn=1024
-      - net.ipv4.tcp_fastopen=3
     deploy:
       resources:
-        limits: { cpus: "0.425", memory: "159M" }
+        limits: { cpus: "0.425", memory: "167M" }
   api-2:
-    image: docker.io/arthurd3/rinha-fraud:k2-test
+    image: rinha-fraud-api:dev   # reusa o build do api-1
+    environment:
+      - FD_SOCKET=/sockets/api2.sock
+      - DATA_PATH=/data
+    volumes:
+      - sockets:/sockets
     networks: [app]
     cpuset: "2"
-    sysctls:
-      - net.core.somaxconn=1024
-      - net.ipv4.tcp_fastopen=3
     deploy:
       resources:
-        limits: { cpus: "0.425", memory: "159M" }
+        limits: { cpus: "0.425", memory: "167M" }
+volumes:
+  sockets:
 networks:
   app:
     driver: bridge
