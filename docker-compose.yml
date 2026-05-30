@@ -1,31 +1,51 @@
 name: rinha-fraud
+# COMPOSE DA SUBMISSION (modo lapada) — referencia IMAGENS pushadas (sem build:),
+# pois a branch submission é image-only (o CI da Rinha só faz `docker compose up`).
+# Copie este conteúdo para docker-compose.yml NA branch submission (ver comandos
+# no hand-off). Validador da prévia OK: deploy.resources.limits.cpus por service,
+# sem sysctls (Rinha #5854), sem cpu_period (sem conflito de daemon).
 services:
-  haproxy:
-    image: haproxy:3.0-alpine
-    volumes:
-      - ./docker/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+  lapada:
+    image: docker.io/arthurd3/rinha-fraud:lapada-lb
+    environment:
+      - FD_UPSTREAMS=/sockets/api1.sock,/sockets/api2.sock
+      - LAPADA_LISTEN=0.0.0.0:9999
     ports:
       - "9999:9999"
+    volumes:
+      - sockets:/sockets
     depends_on: [api-1, api-2]
     networks: [app]
     cpuset: "0"
     deploy:
       resources:
-        limits: { cpus: "0.15", memory: "32M" }
+        limits: { cpus: "0.15", memory: "16M" }
   api-1:
-    image: docker.io/arthurd3/rinha-fraud:k2-test
+    image: docker.io/arthurd3/rinha-fraud:lapada-api
+    environment:
+      - FD_SOCKET=/sockets/api1.sock
+      - DATA_PATH=/data
+    volumes:
+      - sockets:/sockets
     networks: [app]
     cpuset: "1"
     deploy:
       resources:
-        limits: { cpus: "0.425", memory: "159M" }
+        limits: { cpus: "0.425", memory: "167M" }
   api-2:
-    image: docker.io/arthurd3/rinha-fraud:k2-test
+    image: docker.io/arthurd3/rinha-fraud:lapada-api
+    environment:
+      - FD_SOCKET=/sockets/api2.sock
+      - DATA_PATH=/data
+    volumes:
+      - sockets:/sockets
     networks: [app]
     cpuset: "2"
     deploy:
       resources:
-        limits: { cpus: "0.425", memory: "159M" }
+        limits: { cpus: "0.425", memory: "167M" }
+volumes:
+  sockets:
 networks:
   app:
     driver: bridge
