@@ -21,7 +21,7 @@ services:
       resources:
         limits: { cpus: "0.15", memory: "16M" }
   api-1:
-    image: docker.io/arthurd3/rinha-fraud:lapada-api
+    image: docker.io/arthurd3/rinha-fraud:lapada-api-inline
     environment:
       - FD_SOCKET=/sockets/api1.sock
       - DATA_PATH=/data
@@ -33,7 +33,7 @@ services:
       resources:
         limits: { cpus: "0.425", memory: "167M" }
   api-2:
-    image: docker.io/arthurd3/rinha-fraud:lapada-api
+    image: docker.io/arthurd3/rinha-fraud:lapada-api-inline
     environment:
       - FD_SOCKET=/sockets/api2.sock
       - DATA_PATH=/data
