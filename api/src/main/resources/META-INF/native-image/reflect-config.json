@@ -1,0 +1,7 @@
+[
+  { "name": "sun.nio.ch.SocketChannelImpl",
+    "allDeclaredConstructors": true, "allDeclaredMethods": true },
+  { "name": "sun.nio.ch.SelChImpl", "allDeclaredMethods": true },
+  { "name": "java.io.FileDescriptor",
+    "fields": [ { "name": "fd" } ], "allDeclaredConstructors": true }
+]
