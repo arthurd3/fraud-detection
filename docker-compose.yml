@@ -8,24 +8,36 @@ services:
       - "9999:9999"
     depends_on: [api-1, api-2]
     networks: [app]
+    # Onda 13 — cpuset pin haproxy → CPU 0 (api-1 no 1, api-2 no 2, OS no 3).
     cpuset: "0"
+    # Onda 19 — CFS period 20ms (era 100ms default). Mesmo budget efetivo
+    # (3000/20000 = 0.15) mas corta o throttle-stall máximo de ~85ms p/ ~17ms.
+    # `cpus:` removido do deploy.limits p/ evitar o conflito do daemon
+    # "Nano CPUs and CPU Period cannot both be set" (matou Onda 19 em 74b0ccd).
+    cpu_period: 20000
+    cpu_quota: 3000
     deploy:
       resources:
-        limits: { cpus: "0.15", memory: "32M" }
+        limits: { memory: "32M" }
   api-1:
     image: docker.io/arthurd3/rinha-fraud:k2-test
     networks: [app]
     cpuset: "1"
+    # Onda 19 — 8500/20000 = 0.425 efetivo (mesmo budget; só muda granularidade).
+    cpu_period: 20000
+    cpu_quota: 8500
     deploy:
       resources:
-        limits: { cpus: "0.425", memory: "159M" }
+        limits: { memory: "159M" }
   api-2:
     image: docker.io/arthurd3/rinha-fraud:k2-test
     networks: [app]
     cpuset: "2"
+    cpu_period: 20000
+    cpu_quota: 8500
     deploy:
       resources:
-        limits: { cpus: "0.425", memory: "159M" }
+        limits: { memory: "159M" }
 networks:
   app:
     driver: bridge
