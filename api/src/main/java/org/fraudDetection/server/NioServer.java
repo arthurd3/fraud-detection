@@ -122,7 +122,9 @@ public class NioServer {
             channel.close();
             return;
         }
-        dispatch(state,key);
+        if (dispatch(state, key)) {
+            writeResponse(key, channel, state);   // Onda 31: escreve inline (sem epoll_wait extra)
+        }
     }
 
 
@@ -139,19 +141,40 @@ public class NioServer {
     }
 
 
-    private void dispatch(ConnectionState state, SelectionKey key) {
+    /**
+     * Onda 31: escreve a resposta INLINE logo após computá-la (dentro do read()),
+     * eliminando o epoll_wait extra que o ciclo "arma OP_WRITE -> select -> write"
+     * pagava por request. A resposta é <=131 B e o socket (TCP_NODELAY, send-buffer
+     * vazio) quase sempre completa num único write(). Só em write parcial (raro)
+     * arma OP_WRITE e deixa o write(SelectionKey) acima terminar via selector.
+     * Sem mudança de bytes => E=0 intacto.
+     */
+    private void writeResponse(SelectionKey key, SocketChannel channel, ConnectionState state) throws IOException {
+        channel.write(state.writeBuffer);
+
+        if(!state.writeBuffer.hasRemaining()){
+            state.reset();                              // completou -> segue em OP_READ
+        } else {
+            key.interestOps(SelectionKey.OP_WRITE);     // parcial -> selector termina via write()
+        }
+    }
+
+    /** Preenche o writeBuffer e retorna true (resposta pronta p/ writeResponse);
+     *  false quando a rota é desconhecida (conexão cancelada/fechada). */
+    private boolean dispatch(ConnectionState state, SelectionKey key) {
         if (state.methodCode == ConnectionState.METHOD_GET
                 && bytesEqual(state.readBuffer, state.pathStart, state.pathEnd, PATH_READY)) {
-            org.fraudDetection.controllers.HealthController.handle(state, key);
-            return;
+            org.fraudDetection.controllers.HealthController.handle(state);
+            return true;
         }
         if (state.methodCode == ConnectionState.METHOD_POST
                 && bytesEqual(state.readBuffer, state.pathStart, state.pathEnd, PATH_FRAUD)) {
-            org.fraudDetection.controllers.FraudController.handle(state, key);
-            return;
+            org.fraudDetection.controllers.FraudController.handle(state);
+            return true;
         }
         key.cancel();
         try { key.channel().close(); } catch (IOException ignored) {}
+        return false;
     }
 
     private static boolean bytesEqual(java.nio.ByteBuffer buf, int start, int end, byte[] expected) {
