@@ -29,6 +29,13 @@
                     <target>21</target>
                     <!-- Onda 5: jdk.incubator.vector removido (dead code); o
                          compilador não precisa mais do módulo. -->
+                    <!-- Rust port (2026-05-30): o binding @CContext/@CFunction usa
+                         org.graalvm.nativeimage.c.*, módulo embutido no GraalVM JDK
+                         (não precisa de dep graal-sdk externa). -->
+                    <compilerArgs>
+                        <arg>--add-modules</arg>
+                        <arg>org.graalvm.nativeimage</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
             <plugin>
@@ -86,6 +93,14 @@
                                      linka libz dinâmico. Static-except-libc
                                      resolve sem inflar a imagem. -->
                                 <buildArg>-H:+StaticExecutableWithDynamicLibC</buildArg>
+                                <!-- Rust port (2026-05-30): linka libfdsearch.a (motor
+                                     de busca) via a C-interface. CLibraryPath = linker
+                                     (acha o .a); CCompilerOption=-I = include (acha o
+                                     fdsearch.h na query da @CContext). G0 provou que os
+                                     DOIS são necessários. O Dockerfile stage o .a+.h em
+                                     /src/api/clib antes do mvnw. -->
+                                <buildArg>-H:CLibraryPath=/src/api/clib</buildArg>
+                                <buildArg>-H:CCompilerOption=-I/src/api/clib</buildArg>
                                 <buildArg>-O3</buildArg>
                                 <!-- alvo = Mac Mini Late-2014 Haswell/AVX2 (RINHA_PLAN
                                      §1.7) => x86-64-v3 (NÃO -march=native: builder ≠

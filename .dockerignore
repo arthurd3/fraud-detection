@@ -1,5 +1,6 @@
 .git
 **/target
+rust-engine/clib
 **/*.json.gz
 **/hnsw.rbh1.golden
 **/example-references.json
