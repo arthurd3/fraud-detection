@@ -1,9 +1,30 @@
 # Spec — Portar `KdTree.search` para um motor em Rust via GraalVM `@CFunction`
 
-- **Data:** 2026-05-29
-- **Branch:** `main` (código-fonte); `submission` permanece image-only.
+- **Data:** 2026-05-29 · **revisado 2026-06-01** (pós-lapada; ver §0).
+- **Branch:** `feat/rust-kdtree-search` (a partir de `main` @ `8743bf7`); `submission` permanece image-only.
 - **Tipo:** port pontual (1 módulo) Java → Rust, dentro do binário GraalVM native-image.
-- **Status:** design aprovado em brainstorming; pendente review do spec → writing-plans.
+- **Status:** design reconfirmado em brainstorming 2026-06-01 (4 decisões via AskUserQuestion); pendente review do spec → writing-plans → implementação (Claude implementa, usuário valida).
+
+---
+
+## 0. Revisão 2026-06-01 (pós-lapada) — AUTORITATIVO onde divergir do corpo
+
+O corpo (§1–§13) foi escrito em 2026-05-29, ANTES de a arquitetura **lapada (FD-passing)** virar produção. Esta revisão reconfirma o design com 4 decisões do usuário e corrige 6 pontos. **Onde §0 divergir do corpo abaixo, §0 manda.**
+
+**Decisões (brainstorming 2026-06-01):** (1) alvo = a busca KD-tree inteira; (2) estratégia = **port direto** (sem spike de medição), valida E=0 e mede na prévia; (3) implementador = **Claude implementa, usuário valida**; (4) fronteira = **Approach A** (Java passa só `float[14]`; Rust faz `q16`+`round4` também).
+
+**Deltas vs o corpo:**
+1. **Baseline atual = lapada #36** (`aa7fde8`, imagem `arthurd3/rinha-fraud:lapada-api-mlock`): **final_score 5592.63 / p99 2.554905 ms / E=0**. NÃO mais o K2 4875/13 ms citado no §1/§15. `detection_score` segue 3000 (E=0); 100% do gap p/ 6000 é p99_score. A conclusão **host-bound** do §1 **permanece** (compute ~18 µs de ~2,55 ms).
+2. **G0 (link-proof) JÁ ESTÁ FEITO.** O lapada já linka e roda `@CFunction`+staticlib `libfdsearch.a` no native-image em produção (`fd_listener_init`/`fd_next_client`/`fd_mlock_region`). **Pula-se a Fase 0**; vai direto pra Fase 1 (port). O risco #1 do §11 (não-linkar) está RETIRADO.
+3. **Approach A — fronteira:** `fd_search` recebe ponteiro p/ **`float[14]`** (o `s.queryVector` semântico, já `r4`'d no parse), NÃO `double[14]`. O Rust replica `Quantizer.q16(v)=(short)Math.round(clamp(v)*10000f)` (math **f32**) E `round4(v)=Math.round((double)v*1e4)/1e4` (math **f64**), exatamente como `KdTree.prepareSearch`. Resolve a ambiguidade §4(`double[14]`) vs §5(Rust faz q16).
+4. **Arredondamento (precisão do risco #1, §6):** os refs no `.kdt` foram quantizados com **Java `Math.round` (half-up)** no build (`Quantizer.q16` via `KdTreeBuilder`); o parse (`r4`) usa o mesmo. Como TODO input de `r4`/`q16` é clampado a ≥0 (parser `clamp`: `x<0?0:…`) ou é o literal −1 (sentinela v[5]/v[6]; `round4(−1)=−1` em qualquer convenção), Java `Math.round` **coincide** com o `round()` do `main.c` (half-away) p/ este dataset. **Ação:** Rust replica o **`Math.round` EXATO do OpenJDK** (bit-manip de `to_bits`) — o invariante com que o índice foi assado — versão float (`q16`, `SIGNIFICAND_WIDTH=24`/`EXP_BIAS=127`) e double (`round4`, `53`/`1023`). NÃO usar `f32::round()`/`f64::round()` (half-away) nem `(x+0.5).floor()` (tem o bug de double-round).
+5. **Validação (corrige §6/§9/§12): `@CFunction` NÃO roda no HotSpot** (só no native-image) ⇒ "ExactAgree engine=rust" no JVM é impossível. Gate E=0 (SAGRADO):
+   - **G2a — agreement em Rust (`cargo test`):** o crate lê `references.kdt` (RKD6) + `rinha-de-backend-2026/…/test-data.json` (54.100), roda `fd_search` em cada entrada e compara `approved`+`fraud_score` com `expected_*` (= ground truth `main.c`). **0/54.100** ou NÃO shipa. Prova Rust==ground-truth direto.
+   - **G2b — path Java intacto:** o `ExactAgree` Java existente segue **0/54.100** (o caminho Java não foi tocado; vira oráculo atrás da flag).
+   - **G2c — e2e:** k6 oficial sobre o binário nativo (stack lapada) → E=0 (fp0 fn0 http_errors0), como o gate do lapada.
+6. **Posse do índice + mlock + footprint:** mantém "Rust é dono do mmap" (`fd_init(path)`). Consolida o lever **Onda 32 `mlock(pts)`** dentro do Rust (já tem `fd_mlock_region`/`fd_raise_memlock_rlimit`). Sob flag=rust, o binário nativo **pula `KdTree.load`** → Java não aloca `topSlot` (`int[n]`≈12 MB on-heap) nem `topBbox`/scratch → pequena REDUÇÃO de heap Java (bônus, não é o objetivo). `ExactAgree`/oráculo Java (HotSpot) seguem usando `KdTree.load`.
+
+**Caveat honesto (achado no código 2026-06-01):** `KdTree.distSumI16:341-357` afirma que o **GraalVM Native já auto-vetoriza** o loop escalar i16 p/ AVX2. Se procede, o ganho de SIMD do Rust é **menor** que o naïve; a vantagem real do Rust passa a ser o codegen LLVM `-O3` no CONJUNTO da busca (heap/branch/prefetch/rerank), não só o kernel. Combinado com o p99 host-bound, **o resultado na prévia pode ser NEUTRO** — desfecho aceitável e informativo (foi a escolha "port direto + medir"). O kernel Rust usará **AVX2 explícito** (`_mm256_madd_epi16(diff,diff)` com lanes 14–15 mascaradas a 0), não só confiar no auto-vec.
 
 ---
 
@@ -61,7 +82,7 @@ int32_t fd_init(const char* kdt_path);          // boot: mmap + parse RKD6; 0=ok
 int32_t fd_search(const double* query14);        // por request: retorna fraudCount 0..5
 ```
 
-- Java declara via a C-interface do GraalVM: `@CFunction` (chamada Java→nativo) + `@CContext`/`@CLibrary` conforme necessário; query passada como ponteiro para `double[14]` (usar `PinnedObject`/`CTypeConversion` ou um buffer off-heap já existente no `ConnectionState`).
+- Java declara via a C-interface do GraalVM: `@CFunction` + `@CContext(FdDirectives.class)` (já existe). Query passada como ponteiro para **`float[14]`** (Approach A, §0): Java copia `s.queryVector` num staging buffer **direct** (process-wide, single-thread; ~56 B) e passa o endereço via `BufferAddr.addressOf` (mesmo padrão já provado do `fd_mlock_region`). Rust faz `q16`+`round4` a partir desses floats. Fraude: `fd_search` retorna o `fraudCount` (i32); opcionalmente escreve os 5 bits de fraude no staging p/ paridade de `s.knnFraud`.
 - `fraudCount` → Java mapeia para resposta canned (mesma tabela do `HttpResponseWriter` atual). Superfície FFI minúscula, sem structs complexas.
 - `fd_init` chamado 1× no boot (`Main`/inicialização), recebendo o path resolvido de `DATA_PATH/references.kdt`.
 
@@ -82,9 +103,9 @@ Replicar, do `KdTree.java` + `KdLayout.java` + `DistanceFunctions.java` + `KdScr
 Ground truth = `data-generator/main.c` (kNN k=5 sq-euclid brute sobre refs **round4** f64; `approved = fraud_n/5 < 0.6`; tie-break menor índice). Java `:k2-test` já é E=0 contra ele.
 
 - **f64 IEEE-754 é idêntico C↔Java↔Rust** → o grosso casa por construção.
-- ⚠️ **Arredondamento (risco #1):** Java `Math.round(x)` = `floor(x+0.5)`; Rust `f64::round()` = half-away-from-zero — **divergem em negativos**. **Ação:** ler o `round`/cast exato do `main.c` e replicar **idêntico** no Rust (provavelmente `(x*10000.0 + 0.5).floor()/10000.0` ou conforme o `.c`), NÃO usar `.round()` cego. Como `queryVector` já é round4'd no parse (idempotente) e refs são i16, o ponto sensível é só essa expressão.
+- ⚠️ **Arredondamento (risco #1) — ver §0-delta-4:** replicar o **`Math.round` EXATO do OpenJDK** (bit-manip via `to_bits`, half-up COM a correção do bug de double-rounding) — NÃO `(x+0.5).floor()` (tem o bug) nem `f32/f64::round()` (half-away). É o invariante com que o `.kdt` foi assado (`Quantizer.q16`) e o parse (`r4`) operam. Duas versões: float (`q16`, `SIGNIFICAND_WIDTH=24`/`EXP_BIAS=127`) e double (`round4`, `53`/`1023`). Como todo input é clampado ≥0 ou é o literal −1, isto coincide com o `round()` half-away do `main.c` — mas o alvo é casar com o ÍNDICE, não com o `.c`.
 - **Tie-break / ordenação estável:** replicar `heapsortByOrig` (menor origId vence) exatamente.
-- **Gate G2 (bloqueante):** `ExactAgree` 0 mismatches / 54.100 vs `expected_approved` **E** diff do top-5 / fraudCount contra o oráculo Java `:k2-test` em todas as 54.100 entradas. Sem 0/54100, não shipa.
+- **Gate G2 (bloqueante) — ver §0-delta-5:** `@CFunction` não roda no HotSpot ⇒ a agreement do Rust é via **`cargo test`** (lê `.kdt`+`test-data.json`, roda `fd_search` nas 54.100, compara `approved`+`fraud_score` vs `expected_*` = ground truth). **0/54.100** ou não shipa. + `ExactAgree` Java segue **0/54.100** (path Java intacto) + e2e k6 nativo **E=0**.
 
 ## 7. Build & integração
 
