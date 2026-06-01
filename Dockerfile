@@ -9,7 +9,7 @@ RUN microdnf install -y gcc tar gzip \
  && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
  && /root/.cargo/bin/rustc --version
 COPY rust-engine/ ./rust-engine/
-RUN cd rust-engine && /root/.cargo/bin/cargo build --release   # => target/release/libfdsearch.a
+RUN cd rust-engine && RUSTFLAGS="-C target-cpu=x86-64-v3" /root/.cargo/bin/cargo build --release   # => libfdsearch.a (AVX2/v3, casa o -march do native-image)
 COPY api/ ./api/
 # Stage do .a+.h p/ a C-interface (pom: -H:CLibraryPath / -H:CCompilerOption=/src/api/clib).
 # api/default.iprof versionado (PGO offline — docs/TUTORIAL_NATIVE.md §6).

@@ -1,15 +1,10 @@
 name: rinha-fraud
-# COMPOSE DA SUBMISSION (modo lapada) — referencia IMAGENS pushadas (sem build:),
-# pois a branch submission é image-only (o CI da Rinha só faz `docker compose up`).
-# Copie este conteúdo para docker-compose.yml NA branch submission (ver comandos
-# no hand-off). Validador da prévia OK: deploy.resources.limits.cpus por service,
-# sem sysctls (Rinha #5854), sem cpu_period (sem conflito de daemon).
-# Rust port (2026-06-01): api = :lapada-api-rust + FD_RUST_SEARCH=1 (motor de busca
-# KD-tree em Rust, E=0 provado). ROLLBACK p/ #36: api → :lapada-api-mlock e remova
-# FD_RUST_SEARCH (a mesma imagem :lapada-api-rust SEM a env cai no caminho Java).
+# SMOKE local do motor de busca Rust (FD_RUST_SEARCH=1) sobre a imagem nativa
+# :lapada-api-rust recém-buildada + o lapada já pushado. Mesma topologia/limits da
+# submission (1.0 CPU / 350M). Só p/ validar boot + /ready + 2 oráculos pelo LB.
 services:
   lapada:
-    image: docker.io/arthurd3/rinha-fraud:lapada-lb
+    image: arthurd3/rinha-fraud:lapada-lb
     environment:
       - FD_UPSTREAMS=/sockets/api1.sock,/sockets/api2.sock
       - LAPADA_LISTEN=0.0.0.0:9999
@@ -24,7 +19,7 @@ services:
       resources:
         limits: { cpus: "0.15", memory: "16M" }
   api-1:
-    image: docker.io/arthurd3/rinha-fraud:lapada-api-rust
+    image: arthurd3/rinha-fraud:lapada-api-rust
     environment:
       - FD_SOCKET=/sockets/api1.sock
       - DATA_PATH=/data
@@ -39,7 +34,7 @@ services:
       resources:
         limits: { cpus: "0.425", memory: "167M" }
   api-2:
-    image: docker.io/arthurd3/rinha-fraud:lapada-api-rust
+    image: arthurd3/rinha-fraud:lapada-api-rust
     environment:
       - FD_SOCKET=/sockets/api2.sock
       - DATA_PATH=/data

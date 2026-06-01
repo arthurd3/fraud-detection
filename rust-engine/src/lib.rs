@@ -5,6 +5,89 @@ use std::os::raw::c_int;
 use libc::c_void;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+// ===== Motor de busca KD-tree (Rust port de KdTree.search) =====
+mod dist;
+mod layout;
+mod quant;
+mod round;
+pub mod io;
+pub mod kdtree;
+
+struct Engine {
+    index: io::Index,
+    scratch: Box<kdtree::Scratch>,
+}
+
+// Single-thread (reactor NioServer): fd_init no boot, fd_search no reactor — mesma
+// thread. Ponteiro p/ Engine vazado (vive o processo todo). Acesso só via deref do
+// ponteiro (não tomamos ref do static → sem lint static_mut_refs).
+static mut ENGINE: *mut Engine = core::ptr::null_mut();
+
+/// Inicializa o motor: mmap RKD6 + scratch. `do_mlock` pina pts (Onda 32).
+/// API interna p/ o exemplo `agree` e testes. 0..=Ok via Result.
+pub fn init_from_path(path: &str, do_mlock: bool) -> Result<(), String> {
+    dist::detect_cpu();
+    let index = io::Index::open(path, do_mlock)?;
+    let scratch = kdtree::Scratch::new();
+    let engine = Box::new(Engine { index, scratch });
+    unsafe {
+        ENGINE = Box::into_raw(engine);
+    }
+    Ok(())
+}
+
+/// Busca sobre o engine global (single-thread). fraudCount 0..5, ou -1 se não-init.
+pub fn search_query(q14: &[f32; 14]) -> i32 {
+    unsafe {
+        if ENGINE.is_null() {
+            return -1;
+        }
+        let e = &mut *ENGINE;
+        e.scratch.search(&e.index, q14)
+    }
+}
+
+/// Boot (modo rust): mmap de `$DATA_PATH/references.kdt` (default src/main/resources).
+/// 0=ok, -1=erro. Espelha Main.dataPath().
+#[no_mangle]
+pub extern "C" fn fd_init() -> i32 {
+    let data = std::env::var("DATA_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "src/main/resources".to_string());
+    let path = format!("{}/references.kdt", data);
+    match init_from_path(&path, true) {
+        Ok(()) => {
+            eprintln!("fd_init: kdtree RKD6 mmap de {}", path);
+            0
+        }
+        Err(e) => {
+            eprintln!("fd_init falhou: {}", e);
+            -1
+        }
+    }
+}
+
+/// Por request: endereço (i64) de um buffer com 14 f32 LE (queryVector semântico)
+/// → fraudCount 0..5. Recebe o addr como i64 (mesmo padrão do `fd_mlock_region`;
+/// o binding Java passa `BufferAddr.addressOf` de um DirectByteBuffer).
+#[no_mangle]
+pub extern "C" fn fd_search(q_addr: i64) -> i32 {
+    if q_addr == 0 {
+        return -1;
+    }
+    let q = q_addr as usize as *const f32;
+    let mut q14 = [0f32; 14];
+    unsafe {
+        let mut i = 0;
+        while i < 14 {
+            q14[i] = *q.add(i);
+            i += 1;
+        }
+    }
+    search_query(&q14)
+}
+
 #[no_mangle]
 pub extern "C" fn fd_ping(a: i32, b: i32) -> i32 {
     a + b

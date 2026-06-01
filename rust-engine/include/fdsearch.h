@@ -9,4 +9,7 @@ int32_t fd_listener_init(void);
 int32_t fd_next_client(void);
 int32_t fd_raise_memlock_rlimit(void);
 int32_t fd_mlock_region(int64_t addr, int64_t len);
+/* Motor de busca KD-tree (port de KdTree.search). */
+int32_t fd_init(void);
+int32_t fd_search(int64_t q_addr);
 #endif

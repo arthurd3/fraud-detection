@@ -15,12 +15,27 @@ public class Main {
         long t0 = System.currentTimeMillis();
         // Onda 7 v2: EXACT KD-tree (RKD6) mmap. Decisão de fraude byte-idêntica
         // ao ground truth oficial. INALTERADO no modo lapada (E=0 preservado).
-        KdTree.load(d + "/references.kdt");
-        System.out.println("kdtree loaded: " + KdTree.INSTANCE.size()
-                + " nós (" + (System.currentTimeMillis() - t0) + " ms)");
-        // Onda 32 (p99): pina o índice mmap'd p/ matar a cauda de page-fault
-        // (best-effort; no-op em heap mode; E=0 intacto). Após KdTree.load.
-        KdTree.INSTANCE.mlockIndex();
+        // Rust port (2026-06-01): FD_RUST_SEARCH=1 → o motor Rust é dono do mmap
+        // (fd_init lê $DATA_PATH/references.kdt + mlock pts), e o Java pula o
+        // KdTree.load (não aloca topSlot int[n]≈12MB on-heap). Ausente → Java.
+        String rs = System.getenv("FD_RUST_SEARCH");
+        boolean rustSearch = rs != null && (rs.equals("1") || rs.equalsIgnoreCase("true"));
+        if (rustSearch) {
+            int rc = org.fraudDetection.rust.RustSearch.kdInit();
+            if (rc != 0) {
+                System.err.println("fd_init (motor Rust) falhou rc=" + rc);
+                System.exit(5);
+            }
+            System.out.println("kdtree: motor Rust ativo (fd_init, "
+                    + (System.currentTimeMillis() - t0) + " ms)");
+        } else {
+            KdTree.load(d + "/references.kdt");
+            System.out.println("kdtree loaded: " + KdTree.INSTANCE.size()
+                    + " nós (" + (System.currentTimeMillis() - t0) + " ms)");
+            // Onda 32 (p99): pina o índice mmap'd p/ matar a cauda de page-fault
+            // (best-effort; no-op em heap mode; E=0 intacto). Após KdTree.load.
+            KdTree.INSTANCE.mlockIndex();
+        }
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 9999;
 
         String fdSock = System.getenv("FD_SOCKET");

@@ -16,3 +16,7 @@ references.kdt
 ### Onda 10 — overrides locais para benchmark relativo no rig (gitignored).
 docker-compose.onda9.yml
 docker-compose.onda10test.yml
+
+### Rust KD-tree port (2026-06-01) — golden de queries p/ o gate E=0 (cargo
+### agreement), gerado por DumpQueries.java (~3MB). Regenerável; não versionar.
+agree-queries.bin
