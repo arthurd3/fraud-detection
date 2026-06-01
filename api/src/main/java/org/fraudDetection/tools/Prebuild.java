@@ -1,7 +1,5 @@
 package org.fraudDetection.tools;
 
-import org.fraudDetection.dataset.MmapDataset;
-import org.fraudDetection.knn.HnswIndex;
 import org.fraudDetection.knn.KdTree;
 import org.fraudDetection.knn.KdTreeBuilder;
 import org.fraudDetection.knn.KdTreeIO;
@@ -15,14 +13,10 @@ import java.nio.file.Path;
 import java.util.zip.GZIPInputStream;
 
 /**
- * Offline pre-build (never runs in the container). Builds:
- *   1. references.kdt  — the EXACT KD-tree (RKD3), Onda 7 v2 (primary).
- *   2. references.bin / hnsw.bin — legacy RB2 + HNSW (kept; unused at runtime
- *      now but retained so the legacy oracle tests still build/run).
- *
- * The KD-tree source vectors are streamed from references.json.gz with the
- * SAME byte-by-byte float parser as {@link MmapDataset#build} (double
- * accumulate → float; references.json.gz values are exact multiples of 1e-4).
+ * Offline pre-build (never runs in the container). Builds {@code references.kdt}
+ * — the EXACT KD-tree (RKD6), Onda 7 v2. The source vectors are streamed from
+ * references.json.gz (byte-by-byte float parser: double accumulate → float;
+ * references.json.gz values are exact multiples of 1e-4).
  */
 public final class Prebuild {
     private Prebuild() {}
@@ -36,7 +30,7 @@ public final class Prebuild {
                     System.getenv().getOrDefault("DATA_PATH", "src/main/resources"));
         long t0 = System.currentTimeMillis();
 
-        // ── 1. EXACT KD-tree (references.kdt) ────────────────────────────────────────
+        // ── EXACT KD-tree (references.kdt) ───────────────────────────────────────────
         String kdt = d + "/references.kdt";
         if (KdTreeIO.isValid(Path.of(kdt), N)) {
             System.out.println("references.kdt já válido (" + N + " nós) — pulando build");
@@ -59,12 +53,6 @@ public final class Prebuild {
             System.out.println("references.kdt pronto: " + n + " nós, "
                     + new File(kdt).length() + " bytes");
         }
-
-        // ── 2. Legacy RB2 + HNSW (kept for the legacy oracle tests) ──────────────────
-        MmapDataset.load(d + "/references.json.gz", d + "/references.bin");
-        System.out.println("references.bin (legacy RB2) pronto: " + MmapDataset.count + " vetores");
-        HnswIndex.load(d + "/hnsw.bin");
-        System.out.println("hnsw.bin (legacy RBH2) pronto");
 
         System.out.println("Prebuild concluído em "
                 + ((System.currentTimeMillis() - t0) / 1000) + "s");

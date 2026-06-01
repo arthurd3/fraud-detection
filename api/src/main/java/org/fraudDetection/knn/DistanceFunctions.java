@@ -10,18 +10,6 @@ public final class DistanceFunctions {
 
     private DistanceFunctions() {}
 
-    public static float sqDist(float[] a, float[] b) {
-        float s = 0f;
-        for (int i = 0; i < 14; i++) { float d = a[i] - b[i]; s += d * d; }
-        return s;
-    }
-
-    public static int sqDistI8Scalar(byte[] q, byte[] v) {
-        int acc = 0;
-        for (int k = 0; k < 16; k++) { int d = q[k] - v[k]; acc += d * d; }
-        return acc;
-    }
-
     // ─────────────────────────── Onda 7 v2 (EXACT KD-tree) ───────────────────────────
 
     /**

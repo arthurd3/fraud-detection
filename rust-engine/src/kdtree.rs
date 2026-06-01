@@ -96,9 +96,6 @@ pub struct Scratch {
     rr_idx: [i32; MAX_K],
     peek_sum_final_i16: i32,
     inv_perm: [usize; DIMS],
-    // watermarks (paridade com ExactAgree)
-    pub max_heap: usize,
-    pub max_pool: usize,
 }
 
 impl Scratch {
@@ -124,8 +121,6 @@ impl Scratch {
             rr_idx: [-1; MAX_K],
             peek_sum_final_i16: 0,
             inv_perm: inv_permutation(),
-            max_heap: 0,
-            max_pool: 0,
         })
     }
 
@@ -161,9 +156,6 @@ impl Scratch {
                 self.pool_orig[self.pool_size] = index.orig_id(tree_idx);
                 self.pool_i16_sum[self.pool_size] = dist;
                 self.pool_size += 1;
-                if self.pool_size > self.max_pool {
-                    self.max_pool = self.pool_size;
-                }
             }
         }
     }
@@ -373,9 +365,6 @@ impl Scratch {
                         self.bbf_slab_pool[pool_off + split_dim] = new_slab_d;
                         let mut i = self.bbf_size;
                         self.bbf_size += 1;
-                        if self.bbf_size > self.max_heap {
-                            self.max_heap = self.bbf_size;
-                        }
                         while i > 0 {
                             let parent = (i - 1) >> 1;
                             if self.bbf_slab_sum[parent] <= new_slab_sum {

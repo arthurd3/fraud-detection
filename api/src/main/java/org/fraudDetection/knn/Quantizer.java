@@ -6,14 +6,6 @@ public final class Quantizer {
 
     static float clamp(float v) { return v < -1f ? -1f : (v > 1f ? 1f : v); }
 
-    public static byte q(float v) {
-        return (byte) Math.round(clamp(v) * 127f);
-    }
-
-    public static void quantize(float[] src, byte[] dst) {
-        for (int i = 0; i < 14; i++) dst[i] = q(src[i]);
-    }
-
     /**
      * Onda 7 v2 — i16 quantization for the EXACT KD-tree:
      * {@code round(clamp(v) * 10000)}. Lossless for the contest's 4-decimal

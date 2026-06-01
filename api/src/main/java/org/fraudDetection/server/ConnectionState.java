@@ -38,19 +38,12 @@ public class ConnectionState {
 
     public final float[] queryVector = new float[14];
 
-    public final float[] knnDist = new float[5];
     public final boolean[] knnFraud = new boolean[5];
-
-    public final byte[] queryQ   = new byte[16];
-    public final byte[] vScratch = new byte[16];
 
     // Onda 7 v2: permuted i16 query for the EXACT KD-tree (lanes 14-19 zero).
     // Filled by KdTree.search from queryVector; not cleared on reset (overwritten
     // each request).
     public final short[] queryQ16 = new short[20];
-
-    // Onda 3: top-5 ids do HNSW (lazy; zero-alloc após 1ª request; não limpa no reset)
-    public int[] knn5;
 
     // Onda 17 (ships Onda 15 parser code per user decision to validate on Mac Mini):
     // scratch buffer for FraudRequestParser.indexKeys() — single-pass body scan
