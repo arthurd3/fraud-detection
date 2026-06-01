@@ -1,7 +1,8 @@
 //! Kernel de distância i16 (Σ sobre 14 dims de (q[d]-node[d])², acumulador i32 —
 //! invariante do contest: soma < 2^31). Escalar (referência/fallback) + AVX2
-//! explícito (`_mm256_madd_epi16`), despachado por runtime-detection p/ rodar
-//! tanto no `cargo test` (dev box) quanto no Mac Mini Haswell.
+//! explícito (`_mm256_madd_epi16`). Em prod (`-C target-cpu=x86-64-v3`) o AVX2 é
+//! escolhido em COMPILE-TIME (`cfg!`, branch elidido); o dev box (sem v3) usa
+//! runtime-detect + escalar (mantém `cargo test`/`agree` portáveis).
 //!
 //! O escalar e o AVX2 dão o MESMO i32 (soma de inteiros é associativa e não há
 //! overflow sob o invariante) → E=0 independe de qual caminho roda.
@@ -21,7 +22,13 @@ pub fn detect_cpu() {
 /// (lanes 0..13 = dims permutadas; 14,15 ignoradas — no nó são leftAndDim).
 #[inline]
 pub fn dist_sum_i16(q: *const i16, node: *const i16) -> i32 {
-    if AVX2.load(Ordering::Relaxed) == 1 {
+    // Prod compila com `-C target-cpu=x86-64-v3` ⇒ `cfg!(target_feature="avx2")` é
+    // const-TRUE ⇒ o compilador elide o branch + a leitura do atomic e inlina
+    // `dist_avx2` direto no hot loop (~300 chamadas/query). Sem v3 (cargo test/agree
+    // no dev box) cai no runtime-detect + escalar → portável.
+    if cfg!(target_feature = "avx2") {
+        unsafe { dist_avx2(q, node) }
+    } else if AVX2.load(Ordering::Relaxed) == 1 {
         unsafe { dist_avx2(q, node) }
     } else {
         dist_scalar(q, node)
