@@ -156,6 +156,14 @@
                             <buildArgs>
                                 <buildArg>--no-fallback</buildArg>
                                 <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+                                <!-- Rust port (Lever 3 PGO): linka libfdsearch.a (igual o
+                                     profile `native`) p/ a busca rust-mode (FD_RUST_SEARCH=1)
+                                     ser de fato profilada. Sem isto o build instrumentado
+                                     não resolve @CContext fdsearch.h nem linka fd_*. -->
+                                <buildArg>-H:CLibraryPath=/src/api/clib</buildArg>
+                                <buildArg>-H:CCompilerOption=-I/src/api/clib</buildArg>
+                                <buildArg>-J--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</buildArg>
+                                <buildArg>-J--add-opens=java.base/java.io=ALL-UNNAMED</buildArg>
                                 <!-- instrumentado roda no box de dev (CPU
                                      desconhecido) p/ treinar: compatibility =
                                      roda em qualquer amd64; o .iprof é

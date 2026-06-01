@@ -1,11 +1,23 @@
-# Onda 12 Phase A — runnable instrumented image. Same as Dockerfile but uses
-# the native-instrument Maven profile (--pgo-instrument, -march=compatibility).
-# Run it under the calib rig with k6, then docker cp /app/default.iprof out
-# to api/default.iprof and rebuild the final Dockerfile for x86-64-v3 + PGO.
+# Build INSTRUMENTADO p/ PGO rust-mode (Lever 3, rumo aos 6000). Espelha o
+# Dockerfile de prod (Fase 0: rustup + cargo build → libfdsearch.a; stage .a/.h)
+# e usa o profile native-instrument (--pgo-instrument, -march=compatibility) JÁ
+# linkando fd_* (pom: clib + add-opens). Treina o caminho rust-mode REAL
+# (FD_RUST_SEARCH=1), NÃO o Java-search da Onda 12. Recipe: extrair o binário
+# (docker cp /app/api) e rodar no HOST com FD_RUST_SEARCH=1 + k6 oficial → SIGTERM
+# → default.iprof (CWD). Imagem descartável (não pushar).
 FROM container-registry.oracle.com/graalvm/native-image:21 AS builder
 WORKDIR /src
+RUN microdnf install -y gcc tar gzip \
+ && (command -v curl >/dev/null 2>&1 || microdnf install -y curl) \
+ && microdnf clean all \
+ && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+ && /root/.cargo/bin/rustc --version
+COPY rust-engine/ ./rust-engine/
+RUN cd rust-engine && RUSTFLAGS="-C target-cpu=x86-64-v3" /root/.cargo/bin/cargo build --release
 COPY api/ ./api/
-RUN cd api && ./mvnw -q -Pnative-instrument -DskipTests package
+RUN mkdir -p /src/api/clib \
+ && cp rust-engine/target/release/libfdsearch.a rust-engine/include/fdsearch.h /src/api/clib/ \
+ && cd api && ./mvnw -q -Pnative-instrument -DskipTests package
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends zlib1g && rm -rf /var/lib/apt/lists/*
