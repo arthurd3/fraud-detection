@@ -19,7 +19,7 @@ services:
     cpuset: "0"
     deploy:
       resources:
-        limits: { cpus: "0.15", memory: "16M" }
+        limits: { cpus: "0.05", memory: "16M" }
   api-1:
     build: { context: ., dockerfile: Dockerfile }
     image: rinha-fraud-api:dev
@@ -34,7 +34,7 @@ services:
       memlock: -1
     deploy:
       resources:
-        limits: { cpus: "0.425", memory: "167M" }
+        limits: { cpus: "0.475", memory: "167M" }
   api-2:
     image: rinha-fraud-api:dev   # reusa o build do api-1
     environment:
@@ -48,7 +48,7 @@ services:
       memlock: -1
     deploy:
       resources:
-        limits: { cpus: "0.425", memory: "167M" }
+        limits: { cpus: "0.475", memory: "167M" }
 volumes:
   sockets:
 networks:
