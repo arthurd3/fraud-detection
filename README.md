@@ -1,303 +1,77 @@
 # Fraud Detection API — Rinha de Backend 2026
 
-> Real‑time card‑fraud scoring through vector similarity search, built **by hand** on bare Java 21 — zero application frameworks, zero runtime dependencies, a single‑threaded NIO reactor, and a hot path engineered for sub‑millisecond latency.
+> Real-time card-fraud scoring built **from scratch** on Java 21 — no web framework, no JSON library, no vector-search library, **zero runtime dependencies**. A single-threaded NIO server answers every transaction with an **exact** nearest-neighbour search over ~3 million reference vectors, compiled to a **GraalVM native image** and tuned to run inside **1 CPU / 350 MB**.
 
 ![Java](https://img.shields.io/badge/Java-21%20LTS-007396)
-![Build](https://img.shields.io/badge/build-Maven%20(wrapper)-C71A36)
+![GraalVM](https://img.shields.io/badge/GraalVM-Native%20Image%20%2B%20PGO-2356A4)
 ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-success)
-![Status](https://img.shields.io/badge/Waves%201--6-complete%20%E2%9C%94-success)
-![Wave 7](https://img.shields.io/badge/Wave%207-designed%20%E2%80%94%20accuracy%20race%20to%20~6000-orange)
-![Native](https://img.shields.io/badge/GraalVM%20Native%20%2B%20PGO-final__score%204393-success)
+![Accuracy](https://img.shields.io/badge/detection%20errors-E%3D0-success)
 ![License](https://img.shields.io/badge/License-MIT-success)
 
-**Status:** Waves 1–5 **complete** — `int8` off‑heap mmap dataset + a hand‑rolled **HNSW** index + **RBH2** lossless compaction, **containerized**, now a **GraalVM Native Image + PGO** AOT binary. `POST /fraud-score` validated end‑to‑end against both official oracles; recall@5 96.89 % / approved‑agreement 99.90 %. Wave 4a proved the **350 MB budget** (147 MiB / 2 inst. under a `systemd-run` cgroup proxy); Wave 4b containerized it (a public baked image + HAProxy `mode tcp` + 2 instances in `docker compose`, exactly **1.0 CPU / 350 MB**; live‑daemon `final_score` **3611–4394** HotSpot). **Wave 5 (validated 2026‑05‑18, on‑device with the Oracle GraalVM 21 builder)** turned it into a **12 MB AOT native binary** with PGO — **no JIT warm‑up**: official k6 `final_score` **4393.85** at p99 **0.59 ms**, `http_errors` 0, no `OOMKilled` under the hard 350 MB cgroup. The dead `sqDistI8` SIMD path was removed (it broke the Native link; 0 callers since Wave 2b — see [ARCHITECTURE.md §4](docs/ARCHITECTURE.md#4-component-reference)); `sqDistI8Scalar` is byte‑identical, so production behaviour is unchanged (Gate B). Wave 5 closed the technical roadmap and Wave 6 (validated 2026‑05‑18) added optional zero‑alloc polish — the build is **valid for submission**. **Wave 7 (designed 2026‑05‑18 — spec + tutorial ready; hand‑impl pending) honestly reopens the project for the leaderboard top**: "valid for submission" ≠ "competitive at the top". p99 is already at the ceiling (`p99_score` 3000), so 100 % of the gap is *detection accuracy* — current `final_score` ~4393 (E=370: FP=61/FN=103) vs the leaders' 6000.00 (E≈0); Wave 7 is the accuracy race to **~5900–6000** (int16‑lossless + exact `double` rerank + ambiguity escalation — see [the roadmap below](#project-status--roadmap)). The `docker push`, `git push`, and upstream PR are the author's outward‑facing steps.
+**Official preview on the reference hardware (Late-2014 Mac Mini):**
 
----
-
-## Table of contents
-
-- [The challenge](#the-challenge)
-- [Approach & philosophy](#approach--philosophy)
-- [Architecture at a glance](#architecture-at-a-glance)
-- [Quickstart](#quickstart)
-- [Verified results](#verified-results)
-- [Project status & roadmap](#project-status--roadmap)
-- [Repository layout](#repository-layout)
-- [Documentation](#documentation)
-- [Tech stack](#tech-stack)
-- [Author & license](#author--license)
+- 🎯 **Zero detection errors** — `E = 0` (FP = 0 / FN = 0): every transaction scored exactly like the official reference.
+- ⚡ **p99 ≈ 1.8 ms** end-to-end, through the load balancer.
+- 📦 **Within budget** — load balancer + 2 API instances in **1 CPU / 350 MB**, with zero runtime dependencies.
+- 🏆 **Score ≈ 5739.**
 
 ---
 
 ## The challenge
 
-[Rinha de Backend](https://github.com/zanfranceschi/rinha-de-backend-2026) is a Brazilian backend performance competition. The 2026 edition (4th) is a **fraud‑detection** problem solved with **vector search**:
+[Rinha de Backend 2026](https://github.com/zanfranceschi/rinha-de-backend-2026) is a Brazilian backend-performance competition. This edition is a **fraud-detection** problem solved with **vector search**: for every card transaction, project it into a **14-dimensional vector**, find its **5 nearest neighbours** among **~3,000,000** labelled reference vectors, and **approve** it when fewer than 60 % of those neighbours are fraudulent.
 
-For every incoming card transaction, the service must:
-
-1. Project the transaction payload into a **14‑dimensional feature vector**.
-2. Find its **5 nearest neighbours** in a reference dataset of **≈3,000,000 labelled vectors**.
-3. Compute `fraud_score = (fraudulent neighbours) / 5`.
-4. Answer `approved = fraud_score < 0.6`.
+The catch is the budget: the entire stack must run in **1 CPU and 350 MB of RAM**, with **≥ 2 API instances** behind a load balancer. Scoring rewards **detection accuracy** (a wrong answer costs points; an HTTP error costs the most) and **tail latency** (a p99 ≤ 1 ms hits the ceiling).
 
 **API** (port `9999`):
 
-| Method | Path           | Response                                            |
-| ------ | -------------- | --------------------------------------------------- |
-| `GET`  | `/ready`       | `2xx` once the dataset is loaded and the server is up |
-| `POST` | `/fraud-score` | `{ "approved": <bool>, "fraud_score": <float> }`     |
+| Method | Path | Response |
+| --- | --- | --- |
+| `GET` | `/ready` | `200` once the dataset is loaded |
+| `POST` | `/fraud-score` | `{ "approved": <bool>, "fraud_score": <float> }` |
 
-**Infrastructure budget (the hard part):** the *entire* solution must run within **1 CPU and 350 MB of RAM**, with **≥2 API instances** behind a round‑robin load balancer. Scoring rewards both **detection quality** (false negatives cost more than false positives; HTTP errors cost the most) and **tail latency** — a p99 ≤ 1 ms hits the score ceiling, while every 10× latency regression loses points. The reference test environment is a Late‑2014 Mac Mini (2.6 GHz, 8 GB, Ubuntu 24.04, linux‑amd64).
-
-These constraints are the reason for every design decision in this repository.
-
-## Approach & philosophy
-
-| Principle | What it means here |
-| --- | --- |
-| **By hand** | No web framework, no JSON library, no vector‑search library. The HTTP/1.1 parser, the JSON‑to‑vector parser, the dataset loader and the k‑NN search are all hand‑rolled. The only runtime dependency is the JDK. |
-| **Performance‑first** | A single‑threaded NIO reactor, off‑heap direct buffers, an allocation‑free request path (no `String`, no boxing, no intermediate objects), and pre‑computed canned responses. |
-| **Measure, then optimize** | Wave 1 shipped the *correct* baseline (brute‑force float32); every later wave is measured against it. Waves 2a/2b (int8 + off‑heap mmap; SIMD evaluated and **rejected for the hot path** — 3.8× slower, later removed in Wave 5 as it broke the Native link), Wave 3 (HNSW), Wave 4 (350 MB budget + containerization) and **Wave 5 (GraalVM Native Image + PGO — done 2026‑05‑18)** are all complete; the project closes at Wave 5. |
-| **Stable interfaces, evolving internals** | `MmapDataset` and `HnswIndex` were named for their *target* design; as of Wave 3 the names **match reality** (off‑heap `int8` mmap; hand‑rolled HNSW) and the public signatures never changed across waves. Documented in [ARCHITECTURE.md](docs/ARCHITECTURE.md). |
-
-## Architecture at a glance
-
-A single thread owns a `Selector` and drives every connection through a non‑blocking, resumable state machine. Nothing blocks; nothing is allocated on the hot path.
+## How it works
 
 ```mermaid
 flowchart LR
-    C[Client] -->|TCP| S{{NioServer<br/>single-thread reactor}}
-    S -->|GET /ready| HC[HealthController]
-    S -->|POST /fraud-score| FC[FraudController]
-    HC --> W[HttpResponseWriter<br/>canned bytes]
-    FC --> P[FraudRequestParser<br/>JSON bytes - 14-D vector]
-    P --> K[HnswIndex<br/>top-5 nearest]
-    K --> D[(MmapDataset<br/>3M reference vectors)]
-    K --> W
-    W -->|keep-alive| C
+    C[Client] --> LB[Load balancer]
+    LB --> A1[API · NIO reactor]
+    LB --> A2[API · NIO reactor]
+    A1 --> KD[(KD-tree · 3M vectors)]
+    A2 --> KD
 ```
 
-**Component map** (`api/src/main/java/org/fraudDetection/`):
-
-| Package | Classes | Responsibility |
-| --- | --- | --- |
-| `server` | `NioServer`, `ConnectionState`, `HttpParser`, `HttpResponseWriter` | Non‑blocking I/O reactor, per‑connection state, resumable byte‑level HTTP/1.1 parsing, pre‑built responses |
-| `json` | `FraudRequestParser` | Walks the POST body byte‑by‑byte and fills the 14‑D query vector — no `String`, no `Map`, no regex |
-| `dataset` | `MmapDataset` | ≈3M reference vectors as an `int8` RB2 file, off‑heap `MappedByteBuffer` (self‑bootstrapping from the `.gz` on first boot) |
-| `knn` | `Quantizer`, `DistanceFunctions`, `HnswScratch`, `HnswBuilder`, `HnswGraph`, `HnswIndex` | int8 quantization, squared‑Euclidean distance, and a hand‑rolled **HNSW** graph (flat CSR mmap) top‑5 search |
-| `controllers` | `FraudController`, `HealthController` | Wire a parsed request through quantize → HNSW search → response writer |
-| (root) | `Main` | Maps the dataset and the HNSW graph, then starts the reactor |
-
-A deep, component‑by‑component description with rationale and the p99 cycle budget lives in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+- **Hand-rolled I/O** — a single-threaded `java.nio` reactor with a byte-level HTTP/JSON parser. No framework, and no allocations on the hot path.
+- **Exact search** — a balanced **KD-tree** with branch-and-bound returns the *true* 5 nearest neighbours, so detection matches the reference implementation exactly (`E = 0`) — no approximation.
+- **Native + AOT** — compiled with **GraalVM Native Image + PGO**: a small binary with no JVM warm-up.
+- **Rust hot-path** — the load-balancer/forwarder and the distance kernel have a Rust implementation, byte-identical to the Java version.
 
 ## Quickstart
 
-### Prerequisites
-
-- A JDK that can target Java 21 (Java 21 LTS recommended; Java 25 also works for the HotSpot build).
-- The reference dataset `references.json.gz` (≈3M vectors). It is **not versioned** (see `api/.gitignore`); obtain it from the [Rinha de Backend 2026](https://github.com/zanfranceschi/rinha-de-backend-2026) resources and place it at `api/src/main/resources/references.json.gz`. A 100‑entry `example-references.json` is committed for quick sanity checks.
-
-### Build
-
 ```bash
-cd api
-./mvnw clean package -DskipTests
+# build the service (Java 21)
+cd api && ./mvnw clean package -DskipTests
+
+# or run the full stack the way the competition does — load balancer + 2 instances:
+docker compose up -d
+curl -s localhost:9999/ready          # => 200 once the dataset is loaded
 ```
 
-This produces `target/api.jar` (zero dependencies, main class `org.fraudDetection.Main`).
+Then `POST` a transaction to `/fraud-score` and get back `{"approved": …, "fraud_score": …}`. The full request example and the engineering deep-dive live in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
-### Run
-
-The dataset path is resolved relative to the working directory, so start the server from `api/`:
-
-```bash
-cd api
-# first boot only — builds hnsw.bin (and references.bin if absent); minutes:
-java -Xmx2g  --add-modules jdk.incubator.vector -jar target/api.jar 9999
-# steady state — dataset + graph are mmapped:
-java -Xmx256m --add-modules jdk.incubator.vector -jar target/api.jar 9999
-```
-
-- The dataset and HNSW graph are off‑heap `MappedByteBuffer`s, so steady state runs in **`-Xmx256m`** with no OOM. Only the **first boot** needs `-Xmx2g`, to build `hnsw.bin` (and `references.bin` if absent) once; both are gitignored/regenerable.
-- `--add-modules jdk.incubator.vector` is the project convention (the SIMD distance is compiled in, but the production/build path is scalar — see [ARCHITECTURE.md §4](docs/ARCHITECTURE.md#4-component-reference)).
-- The port argument is optional (defaults to `9999`). On startup the server prints `dataset int8 RB2 mmap: <n> ...`, `HNSW mmap: <n> nós ...`, `hnsw pronto`, then `api: Listening on port 9999`.
-
-### Try it
-
-```bash
-# Liveness/readiness
-curl -i http://localhost:9999/ready
-
-# Score a transaction (this is the official "legitimate" oracle, tx-1329056812)
-curl -s -X POST http://localhost:9999/fraud-score \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "id": "tx-1329056812",
-    "transaction":      { "amount": 41.12, "installments": 2, "requested_at": "2026-03-11T18:45:53Z" },
-    "customer":         { "avg_amount": 82.24, "tx_count_24h": 3, "known_merchants": ["MERC-003","MERC-016"] },
-    "merchant":         { "id": "MERC-016", "mcc": "5411", "avg_amount": 60.25 },
-    "terminal":         { "is_online": false, "card_present": true, "km_from_home": 29.2331036248 },
-    "last_transaction": null
-  }'
-# => {"approved":true,"fraud_score":0.0}
-```
-
-### Run with Docker (Wave 4b)
-
-The Rinha harness runs the solution as a public image behind a round‑robin load balancer. The same stack runs locally — `Dockerfile` and `.dockerignore` are at the repo root, and the RBH2 binaries (Wave 4a) are **baked into the image**:
-
-```bash
-# from fraudDetection/ (build context = repo root)
-docker build -t docker.io/<user>/rinha-fraud:onda4b .
-docker compose up -d                 # haproxy + api-1 + api-2 — exactly 1.0 CPU / 350 MB
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9999/ready   # => 200
-curl -s -X POST http://localhost:9999/fraud-score -H 'Content-Type: application/json' \
-  -d '{"id":"tx-1329056812","transaction":{"amount":41.12,"installments":2,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":82.24,"tx_count_24h":3,"known_merchants":["MERC-003","MERC-016"]},"merchant":{"id":"MERC-016","mcc":"5411","avg_amount":60.25},"terminal":{"is_online":false,"card_present":true,"km_from_home":29.23},"last_transaction":null}'
-# => {"approved":true,"fraud_score":0.0}
-docker compose down
-```
-
-`docker compose up` only **uses the baked image** — it never builds and never regenerates the binaries (Wave 4a `tools.Prebuild` did that offline). For the official score: `cd ../rinha-de-backend-2026 && ./run.sh`. Full containerization walkthrough in [docs/TUTORIAL_CONTAINER.md](docs/TUTORIAL_CONTAINER.md).
-
-> ✅ **As‑built (Wave 5, 2026‑05‑18) — this is now a GraalVM Native Image.** The snippet above is the HotSpot (Wave 4b) reference; the **shipped** image is built with the `native` profile via the **Oracle GraalVM 21** builder (GFTC, has PGO) and tagged `:onda5`:
->
-> ```bash
-> # from fraudDetection/ — native profile, Oracle GraalVM 21 builder, PGO (default.iprof), -march x86-64-v3
-> docker build -t docker.io/arthurd3/rinha-fraud:onda5 .
-> docker compose up -d                 # haproxy + api-1 + api-2 — 1.0 CPU / 350 MB
-> curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9999/ready   # => 200 (no warm-up — AOT binary)
-> docker compose down
-> ```
->
-> The container runs the **12 MB AOT binary** (`/app/api 9999`, `distroless/base-debian12`) — no JVM, no JIT warm‑up. Full Wave‑5 walkthrough in [docs/TUTORIAL_NATIVE.md](docs/TUTORIAL_NATIVE.md). `docker push docker.io/arthurd3/rinha-fraud:onda5` + the upstream PR remain the author's outward‑facing steps.
-
-## Verified results
-
-Validated at the close of Wave 3 on a real server with the full 3M dataset at `-Xmx256m` — the five gates (see [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology)):
-
-| Gate | Check | Result |
-| --- | --- | --- |
-| 1 | `GET /ready` + both official oracles, byte‑identical | ✅ `{"approved":true,"fraud_score":0.0}` / `{"approved":false,"fraud_score":1.0}` |
-| 2 | sanity vs the frozen Wave‑1 `float` baseline (2000) | ✅ 99.65 % (≥99 %; now *approximate* — HNSW is not exact) |
-| 3a | recall@5 vs the brute‑force int8 oracle (2000) | ✅ **96.89 %** (≥95 %) @ `ef_search=50` |
-| 3b | approved‑agreement vs the brute oracle (2000) | ✅ **99.90 %** (FP=1, FN=1; ≥99 %) |
-| 4 | HNSW vs brute latency | ✅ HNSW p50 0.084 ms / **p99 0.145 ms** vs brute p99 43.8 ms — **≈430×** |
-| — | `./mvnw clean package` | ✅ exit 0; no test harness leaks into the jar |
-
-> **Latency:** the HNSW search is already **sub‑millisecond on HotSpot** (p99 ≈ 0.145 ms), so the *search* line of the p99 < 1 ms target is met before Native Image. Waves 4–5 harden the rest of the envelope (containerization + 350 MB budget; native image + PGO). ✅ **As‑built (Wave 5, 2026‑05‑18):** the native AOT binary serves the official k6 ramp at end‑to‑end p99 **0.59 ms** through the HAProxy LB **with no warm‑up** (`http_errors` 0) — comfortably inside the 1 ms target without the HotSpot JIT. See the performance budget in [ARCHITECTURE.md](docs/ARCHITECTURE.md#6-performance-budget).
-
-**Wave 4b — containerized stack** (live Docker daemon; HAProxy `mode tcp` + 2 instances in `docker compose`, 1.0 CPU / 350 MB):
-
-| Gate | Check | Result |
-| --- | --- | --- |
-| 1 | `docker compose up` + both oracles **through the HAProxy LB** `:9999` | ✅ 3/3 running, `/ready` 200, oracles byte‑exact, `hnsw pronto` |
-| 2 | `docker stats` under k6 load — Σ MEM < 350 MiB, no `OOMKilled` | ✅ peak **103 MiB** (api 44.6 / 43.5, haproxy 14.8), `OOMKilled=false` ×3 |
-| 3 | official k6 `test/test.js` (ramp 1→900 RPS / 120 s) → `final_score` | ✅ **3611 / 4394** (2 runs), `http_errors:0`, `failure_rate:0.3 %` |
-| 4 | clone `--branch submission` → `docker compose up` (image‑only, no build) | ✅ local `file://` simulation green (`docker push`/PR remain author steps) |
-
-> Wave 4b adds **no Java** — it packages and runs the Wave‑4a artifact exactly as the Rinha harness does. Full gate detail in [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology).
-
-**Wave 5 — GraalVM Native Image + PGO** ✅ *validated 2026‑05‑18, on‑device (Docker + the Oracle GraalVM 21 builder image, cached locally)*. AOT binary, **no JIT warm‑up**; builder = **Oracle GraalVM 21** (free for production under GFTC — the locked "Mandrel + PGO" was contradictory: CE/Mandrel has no PGO). The four gates:
-
-| Gate | Check | Result |
-| --- | --- | --- |
-| A | Native Image links; the *only* Java change is excising **dead** SIMD code (`sqDistI8`, 0 callers since Wave 2b — its `static VectorSpecies` fields break the Native link) | ✅ `sqDistI8` + tests `DistEquivI8`/`BenchSearch` removed; `sqDistI8Scalar` **byte‑identical to HotSpot HEAD** ⇒ "ZERO Java change" honestly reinterpreted as **"ZERO production‑behaviour change"** (Gate B is the proof) |
-| B | HotSpot oracles unchanged + native oracles byte‑exact via the HAProxy LB | ✅ HotSpot `RecallHnsw` recall@5 **96.89 %** / approved‑agree **99.90 %** (FP=1 FN=1); `Rbh2Equiv` **0 / 3,000,000**. Native: `/ready` 200, `tx-1329056812`→`{"approved":true,"fraud_score":0.0}`, `tx-3330991687`→`{"approved":false,"fraud_score":1.0}` |
-| C | native binary size; no `OOMKilled` under the hard **350 MB** cgroup; `http_errors`; p99 (no warm‑up) | ✅ binary **12 MB** (< 80 MB); **no `OOMKilled`** (api 159 M×2 + haproxy 32 M), 0 restarts; `http_errors` **0** @ 900 RPS; p99 **0.59 ms** cold (AOT — no JIT); `docker stats` ~26.6 MiB/inst (`VmHWM` ≈378 MB/inst is reclaimable file‑backed mmap of the baked read‑only index, *not* anonymous cost) |
-| D | official k6 `test/test.js` (ramp 1→900 RPS / 120 s) via LB → `final_score` ≥ HotSpot 4b baseline | ✅ `final_score` **4393.85** (matches 4b's best run; ≥ 3611–4394), `http_errors` **0**, p99 **0.59 ms**, FP=61 FN=103 TP=23934 TN=29960, `failure_rate` **0.3 %**, `p99_score` 3000 (no cut) |
-
-> Build evidence: `Graal compiler: optimization level: 3, target machine: x86-64-v3, PGO: user-provided` (`default.iprof` consumed offline; `--no-fallback`). `-march` corrected v2→**v3** (Haswell/AVX2). Image = `distroless/base-debian12`, entrypoint `/app/api 9999`, ≈399 MB (12 MB binary + 365 MB baked index + distroless glibc). **Wave 5 closes the technical roadmap** (Wave 6 = optional). Full gate detail in [ARCHITECTURE.md §9](docs/ARCHITECTURE.md#9-validation-methodology).
-
-**Wave 6 — `takeTop5` zero‑alloc + LICENSE** ✅ *validated 2026‑05‑18*. Optional polish — `HnswIndex.takeTop5` now drains into the reused `HnswScratch.tN`/`tD` (`int[CAP]`, allocated once) instead of `new int[n]` ×2, making the production hot path **truly zero‑allocation per request**; behaviour is byte‑identical by construction. The project was already complete at Wave 5 (no score target — `final_score` unchanged):
-
-| Gate | Check | Result |
-| --- | --- | --- |
-| 1 — byte‑identical | HotSpot oracles unchanged after the buffer‑source change | ✅ `RecallHnsw` recall@5 **96.89 %** / approved‑agree **99.90 %** (FP=1 FN=1) **identical to Wave 5**; `Rbh2Equiv` **0 / 3,000,000**; both oracles byte‑exact via the HotSpot jar |
-| 2 — zero‑alloc | `AllocCheck` per‑query allocated bytes on the search path | ✅ **0 bytes / 100,000 queries → 0.00 B/query** (baseline pre‑Wave‑6 ≈ 400 B/query) — **PASS** |
-| 3 — official k6 | optional, non‑blocking | ⚪ not run — project closed at Wave 5, behaviour byte‑identical, no score target; Wave 5 `final_score` 4393.85 / p99 0.59 ms stands |
-
-> Wave 6 is the last (optional) wave. The `submission` branch is **not** bumped — a native `:onda6` rebuild is optional and behaviour‑identical; `:onda5` remains the valid closing artifact. Full detail in [ARCHITECTURE.md §5](docs/ARCHITECTURE.md#5-the-zero-allocation-hot-path).
-
-## Project status & roadmap
-
-| Wave | Goal | Status |
-| --- | --- | --- |
-| **1** | End‑to‑end skeleton, brute‑force float32 k‑NN — correctness baseline | ✅ **Complete** |
-| **2a** | int8 quantization + memory‑mapped off‑heap binary dataset | ✅ **Complete** |
-| **2b** | Vector API (SIMD) distance — *evaluated; 3.8× slower for this shape, scalar kept* | ✅ **Complete** |
-| **3** | Hand‑rolled HNSW index — recall@5 96.89 %, p99 ≈ 0.145 ms (≈430× vs brute) | ✅ **Complete** |
-| **4a** | Fit in 350 MB — `hnsw.bin` RBH2 lossless (int24 + sparse upper) + offline prebuild + `DATA_PATH`; proven 147 MiB / 2 inst. under a 350 MiB cgroup | ✅ **Complete** |
-| **4b** | Containerization (HotSpot) + HAProxy + official k6 + ≥2 instances + submission | ✅ **Complete** — live‑daemon validated; `docker push`/PR pending |
-| **5** | GraalVM Native Image + PGO (Oracle GraalVM 21, GFTC) — AOT 12 MB binary, no JIT warm‑up | ✅ **Complete** — validated 2026‑05‑18; official k6 `final_score` **4393.85** @ p99 **0.59 ms**, `http_errors` 0, no `OOMKilled`. Dead `sqDistI8` SIMD removed (broke the Native link); `sqDistI8Scalar` byte‑identical ⇒ behaviour unchanged. **Closes the project**; `docker push`/`git push`/PR pending |
-| **6** | Optional micro‑optimizations (e.g. eliminating the `takeTop5` drain) | ✅ **Complete** — validated 2026‑05‑18: `takeTop5` now zero‑alloc (0 B/query proven), behaviour byte‑identical (RecallHnsw 96.89 %/99.90 % identical), LICENSE MIT added. Optional polish; project already complete at Wave 5 |
-| **7** | Accuracy race to ~6000 — exact‑hybrid detection (`int16`‑lossless + exact `double` rerank + ambiguity escalation) | ⏳ **Designed** (spec+tutorial ready; hand‑impl pending) — accuracy race to ~6000: int16‑lossless + exact rerank + escalation. Reopens the project for the leaderboard top (current `final_score` ~4393 → target ~5900–6000). Spec `docs/superpowers/specs/2026-05-18-onda7-exact-accuracy-design.md` (`3a3cf01`); tutorial `docs/TUTORIAL_EXACT.md` |
-
-The full roadmap, with the per‑stage performance reasoning, is in [`docs/RINHA_PLAN.md`](docs/RINHA_PLAN.md) (PT‑BR).
-
-## Repository layout
+## Repository
 
 ```
-fraudDetection/                # main branch (code) — build context for the image
-├── README.md                  # you are here
-├── COMECE_AQUI.md             # hands-on getting-started guide (PT-BR)
-├── INSTALACAO.md              # toolchain installation (PT-BR)
-├── Dockerfile                 # Wave 4b — multi-stage build, RBH2 binaries baked
-├── .dockerignore              # Wave 4b — excludes the 459 MB RBH1 golden, .git, target, *.gz
-├── docker-compose.yml         # Wave 4b — haproxy + api-1 + api-2 (1.0 CPU / 350 MB)
-├── info.json                  # Wave 4b — submission metadata
-├── docker/
-│   └── haproxy.cfg            # Wave 4b — mode tcp, roundrobin, nbthread 1
-├── docs/
-│   ├── ARCHITECTURE.md        # engineering deep-dive of the as-built system (EN)
-│   ├── RINHA_PLAN.md          # 5-wave implementation plan (PT-BR)
-│   ├── CONCEITOS.md           # underlying concepts (PT-BR)
-│   ├── IMPACTO.md             # design-impact analysis (PT-BR)
-│   ├── TUTORIAL_SERVER_NIO.md # build-it-yourself: the NIO server (PT-BR)
-│   ├── TUTORIAL_JSON_KNN.md   # build-it-yourself: JSON parser + k-NN (PT-BR)
-│   ├── TUTORIAL_CONTAINER.md  # build-it-yourself: Wave 4b containerization (PT-BR)
-│   ├── TUTORIAL_NATIVE.md     # build-it-yourself: Wave 5 GraalVM Native + PGO (PT-BR)
-│   └── tecnologias/           # 14 technology reference notes (PT-BR)
-└── api/                       # the Maven project
-    ├── pom.xml                # zero dependencies; native profile for GraalVM
-    └── src/main/
-        ├── java/org/fraudDetection/
-        │   ├── Main.java
-        │   ├── server/        # NioServer, ConnectionState, HttpParser, HttpResponseWriter
-        │   ├── json/          # FraudRequestParser
-        │   ├── dataset/       # MmapDataset
-        │   ├── knn/           # DistanceFunctions, HnswIndex
-        │   └── controllers/   # FraudController, HealthController
-        └── resources/
-            ├── example-references.json   # 100-entry sanity dataset (versioned)
-            └── references.json.gz        # full 3M dataset (NOT versioned)
+api/          # the Java service — NIO server, JSON parser, KD-tree search, native build
+lapada/       # Rust L4 load-balancer / forwarder
+rust-engine/  # Rust search kernel (hot-path)
+docs/         # architecture notes and hands-on build tutorials
 ```
-
-The **`submission`** branch (Wave 4b) is a separate **orphan** branch with exactly three files — `docker-compose.yml`, `docker/haproxy.cfg`, `info.json` — referencing the public image. It carries **no code, no binaries, no `Dockerfile`**: the Rinha CI clones it shallow and only `docker compose up` (image pull, no build).
-
-## Documentation
-
-| Document | Language | Purpose |
-| --- | --- | --- |
-| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | EN | The as‑built system in depth: request lifecycle, every component, the p99 budget, design trade‑offs |
-| [docs/RINHA_PLAN.md](docs/RINHA_PLAN.md) | PT‑BR | The 5‑wave implementation plan and locked technology stack |
-| [docs/CONCEITOS.md](docs/CONCEITOS.md) | PT‑BR | The concepts behind the approach (NIO, HNSW, quantization, native image) |
-| [docs/IMPACTO.md](docs/IMPACTO.md) | PT‑BR | Why each decision matters for the score |
-| [docs/TUTORIAL_SERVER_NIO.md](docs/TUTORIAL_SERVER_NIO.md) · [docs/TUTORIAL_JSON_KNN.md](docs/TUTORIAL_JSON_KNN.md) | PT‑BR | Hands‑on, line‑by‑line build tutorials |
-| [COMECE_AQUI.md](COMECE_AQUI.md) · [INSTALACAO.md](INSTALACAO.md) | PT‑BR | Getting started and toolchain setup |
-
-> The PT‑BR documents are learning/build material written while implementing the project. **ARCHITECTURE.md** is the canonical, language‑neutral reference for *what was built*.
 
 ## Tech stack
 
-- **Language/runtime:** Java 21 LTS — **GraalVM Native Image + PGO** (Oracle GraalVM 21, GFTC), AOT binary as of Wave 5 (HotSpot remains the build/oracle reference)
-- **I/O:** `java.nio` `Selector` — single‑threaded non‑blocking reactor
-- **SIMD:** ~~`jdk.incubator.vector` (Vector API)~~ — was explored in Wave 2b but **never wired into production** (3.8× slower for this shape) and **removed in Wave 5** (it broke the GraalVM Native link; the production distance is the scalar `sqDistI8Scalar`)
-- **Build:** Maven via the project wrapper (`./mvnw`); `native` profile uses `native-maven-plugin`
-- **Runtime dependencies:** none
-- **License:** MIT (added in Wave 6 — see [`LICENSE`](LICENSE))
+**Java 21 LTS** · **GraalVM Native Image + PGO** · `java.nio` single-threaded reactor · **Rust** hot-path · Maven · **zero runtime dependencies**.
 
-## Author & license
+## License & author
 
-- **Author:** [@arthurd3](https://github.com/arthurd3) — repository: [`arthurd3/fraud-detection`](https://github.com/arthurd3/fraud-detection)
-- **Challenge:** [Rinha de Backend 2026](https://github.com/zanfranceschi/rinha-de-backend-2026) by [@zanfranceschi](https://github.com/zanfranceschi)
-- **License:** **MIT** — see [`LICENSE`](LICENSE) (Copyright (c) 2026 arthurd3). Added in Wave 6 (2026‑05‑18).
+MIT © 2026 **[@arthurd3](https://github.com/arthurd3)** — built for **[Rinha de Backend 2026](https://github.com/zanfranceschi/rinha-de-backend-2026)**.
