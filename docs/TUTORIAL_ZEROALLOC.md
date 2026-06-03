@@ -1,7 +1,7 @@
 # Tutorial — Onda 6: `takeTop5` zero-alloc + LICENSE (otimização final, opcional)
 
-> ✅ **Validada 2026‑05‑18.** Implementada por Claude (override pontual do
-> autor à regra "usuário coda à mão", igual Ondas 4b/5). **Gate 1
+> ✅ **Validada 2026‑05‑18.** Implementada diretamente (override pontual do
+> fluxo tutorial-driven "usuário coda à mão", igual Ondas 4b/5). **Gate 1
 > byte‑idêntico** (RecallHnsw 96,89 %/99,90 % idêntico à Onda 5, Rbh2Equiv
 > 0/3.000.000, 2 oráculos byte‑exatos) + **Gate 2 zero‑alloc** (0 B/query em
 > 100.000) **verdes**; **Gate 3 (k6) opcional não rodado** (projeto já
@@ -71,8 +71,8 @@ reusados** em `HnswScratch` (mesmo molde de `rN/rD/cN/cD`). Drain idêntico
    `tn` alimenta `out`). **Mantemos** `td` como scratch reusado: o diff
    fica mecanicamente byte-idêntico. (Remover `td` é mudança separada —
    fora do escopo; YAGNI.)
-5. **Tutorial-driven.** Você implementa à mão; o Claude valida os gates e
-   reconcilia docs as-built. Commits em `main`, sem atribuição Claude, sem
+5. **Tutorial-driven.** Você implementa à mão; os gates são validados e os
+   docs as-built reconciliados. Commits em `main`, sob a identidade `arthurd3`, sem
    push.
 
 ---
@@ -280,7 +280,7 @@ padrão da 5b/5). `docker push`/`git push`/PR upstream/issue `rinha/test` =
 
 ---
 
-## §9. Reconciliação as-built (Claude, quando validar)
+## §9. Reconciliação as-built (quando validar)
 
 - `docs/ARCHITECTURE.md` §5: a "one honest exception" **deixa de existir** —
   hot path de produção agora **zero-alloc de verdade**; nota datada.
@@ -302,7 +302,7 @@ padrão da 5b/5). `docker push`/`git push`/PR upstream/issue `rinha/test` =
 | remover o `td` write-only | **não** fazer aqui — mudança separada, quebraria o "diff mecanicamente idêntico"; documentado, fora de escopo |
 | achar que é obrigatório | Onda 6 é **opcional**; o projeto já fechou na Onda 5 |
 | `set -u` / matar server por PID / snap docker | se for ao §8: valem as pegadinhas das ondas 4b/5 (`--format \| cat`, build sob `$HOME`, kill por porta) |
-| sem atribuição Claude nos commits | regra permanente do projeto |
+| commits sob a identidade `arthurd3` | regra permanente do projeto |
 
 ---
 
@@ -312,8 +312,8 @@ padrão da 5b/5). `docker push`/`git push`/PR upstream/issue `rinha/test` =
 verdes [+ Gate 3 opcional]; `LICENSE` MIT presente; docs reconciliados.
 
 - Você implementa à mão (HnswScratch +2 campos/+2 linhas, HnswIndex 1
-  linha, `LICENSE`, `AllocCheck`) → Claude valida Gates 1/2 (3 opcional) e
-  reconcilia as-built.
+  linha, `LICENSE`, `AllocCheck`) → os Gates 1/2 (3 opcional) são validados e
+  o as-built reconciliado.
 - Ações outward-facing (suas): `docker push :onda6` (se §8), `git push
   origin main`/`submission`, PR upstream, prévia oficial via issue
   `rinha/test`.

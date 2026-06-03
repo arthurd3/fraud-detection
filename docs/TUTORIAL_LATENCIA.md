@@ -94,7 +94,7 @@ canned. Só se o replay/preview mostrar ganho — não especular.
 - snap docker: `… --format … | cat`; operar sob `$HOME`; `docker build … 2>&1 | cat`.
 - Capturar BASELINE/golden **antes** do rebuild; sem `set -u`; matar :9999 por PID da porta.
 - Relayout: provar `ExactAgree` 0-div ANTES de confiar — renumeração tem que ser exata.
-- Sem atribuição Claude nos commits; identidade `arthurd3`; push = usuário.
+- Commits sob a identidade `arthurd3`; push = usuário.
 
 ## §7. Gates (= a métrica do ranking)
 
@@ -108,7 +108,7 @@ canned. Só se o replay/preview mostrar ganho — não especular.
 ## §8. Fechamento
 
 Reconciliar as-built (ARCHITECTURE/README/RINHA_PLAN, nota datada — padrão do
-projeto) quando os gates fecharem. Commits `main` (sem atribuição Claude,
+projeto) quando os gates fecharem. Commits `main` (sob a identidade
 `arthurd3`): spec → tutorial → feat (por fase). `submission` bump `:onda7`→
 `:onda8` quando o preview melhorar. `docker push`/`git push`/issue `rinha/test`
 = ações outward-facing do usuário. **Onda 8 = corrida pelo p99; sem "fim"

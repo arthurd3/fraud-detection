@@ -136,7 +136,7 @@ futura de escalar p/ kernel C/Rust (top-1 ≤1 ms segue aspiracional contínuo).
 
 ### §8. Próximo passo
 `docs/TUTORIAL_LATENCIA.md` (hands-on PT-BR) + reconciliação as-built quando os
-gates fecharem. Commits `main` (sem atribuição Claude, identidade `arthurd3`):
+gates fecharem. Commits `main` (identidade `arthurd3`):
 spec → tutorial+reconcil → feat (por fase). Branch `submission` bump
 `:onda7`→`:onda8` quando o preview melhorar. `docker push`/`git push`/issue
 `rinha/test` = ações outward-facing do usuário. **Onda 8 = corrida pelo p99;

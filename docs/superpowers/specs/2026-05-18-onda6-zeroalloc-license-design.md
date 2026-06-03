@@ -1,7 +1,7 @@
 # Spec — Onda 6: `takeTop5` zero-alloc + LICENSE (otimização final, opcional)
 
-> ✅ **Validada 2026‑05‑18.** Implementada por Claude (override pontual do
-> autor à regra "usuário coda à mão", igual Ondas 4b/5). **Gate 1
+> ✅ **Validada 2026‑05‑18.** Implementada diretamente (override pontual do
+> fluxo tutorial-driven, igual Ondas 4b/5). **Gate 1
 > byte‑idêntico** (RecallHnsw 96,89 %/99,90 % idêntico à Onda 5, Rbh2Equiv
 > 0/3.000.000, 2 oráculos byte‑exatos) + **Gate 2 zero‑alloc** (0 B/query em
 > 100.000) **verdes**; **Gate 3 (k6) opcional não rodado** (projeto já
@@ -184,8 +184,8 @@ Ações outward-facing (`docker push`/`git push`/PR/submissão `rinha/test`)
 ## Próximo passo
 
 Escrever `docs/TUTORIAL_ZEROALLOC.md` (hands-on PT-BR, espelhando os
-tutoriais anteriores) + commit (spec+tutorial em `main`, sem atribuição
-Claude, sem push). Usuário implementa à mão (HnswScratch/HnswIndex/LICENSE/
-AllocCheck — **2 linhas + 2 campos + 2 arquivos novos**); Claude valida
-Gates 1/2 (e 3 opcional) e reconcilia docs as-built. **Onda 6 é a última
+tutoriais anteriores) + commit (spec+tutorial em `main`, commits sob a
+identidade `arthurd3`, sem push). Usuário implementa à mão (HnswScratch/HnswIndex/LICENSE/
+AllocCheck — **2 linhas + 2 campos + 2 arquivos novos**); os Gates 1/2
+(e 3 opcional) são validados e os docs reconciliados as-built. **Onda 6 é a última
 onda (opcional) — o projeto técnico já estava fechado na Onda 5.**

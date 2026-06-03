@@ -81,8 +81,8 @@ orquestrar o PGO, revalidar os gates anteriores sob o binário nativo.
    §5.2/§9.5 e §12.1 / `02-graalvm-native-image.md` com **nota datada**
    (a escolha "Mandrel" precede o Oracle ficar grátis; preservar histórico).
 2. **Escopo = só `spec` + `docs/TUTORIAL_NATIVE.md`.** Regra permanente do
-   projeto: o usuário implementa à mão a partir do tutorial; o Claude valida os
-   gates depois. Esta entrega **não** edita `pom.xml`/`Dockerfile` nem roda
+   projeto: o usuário implementa à mão a partir do tutorial; os Gates A–D são
+   validados depois. Esta entrega **não** edita `pom.xml`/`Dockerfile` nem roda
    build nativo.
 3. **Imagem final = distroless principal + scratch/musl §opcional.** Runtime
    `gcr.io/distroless/base-debian12` (glibc, ~20 MB, sem cadeia de build musl —
@@ -285,7 +285,7 @@ Escrever `docs/TUTORIAL_NATIVE.md` (hands-on PT-BR §0–§15, espelhando
 `docs/tecnologias/02-graalvm-native-image.md` (Mandrel → Oracle GraalVM GFTC,
 nota datada) + `README.md`/`ARCHITECTURE.md` roadmap Wave 5 →
 "spec + tutorial ready (hand-impl pending)" (espelha o tratamento do 4b quando
-só especificado). Implementação à mão = usuário; o Claude valida os Gates A–D
+só especificado). Implementação à mão = usuário; os Gates A–D são validados
 quando Oracle GraalVM + daemon Docker estiverem prontos. **Onda 5 fecha o
 projeto** (Onda 6 = otimizações opcionais).
 

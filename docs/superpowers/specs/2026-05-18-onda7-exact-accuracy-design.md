@@ -16,7 +16,7 @@
 
 > Brainstorming → design travado → tutorial. Projeto **tutorial-driven**: o
 > entregável é o doc (`docs/TUTORIAL_EXACT.md`); o usuário implementa à mão
-> **ou** delega ao Claude (override pontual, como Ondas 5/6). Antecessor:
+> **ou** a implementação é feita diretamente (override pontual, como Ondas 5/6). Antecessor:
 > `2026-05-18-onda6-zeroalloc-license-design.md`.
 
 > 🎯 **Objetivo (2026-05-18).** O `final_score` atual é **4393** (p99 já no
@@ -178,9 +178,9 @@ Confirmar que `float` não desloca a 4ª decimal (Gate 3 cobre nos 54.100).
 ### §8. Próximo passo
 
 Escrever `docs/TUTORIAL_EXACT.md` (hands-on PT-BR, espelhando os anteriores)
-+ commit (spec+tutorial em `main`, sem atribuição Claude, sem push) +
++ commit (spec+tutorial em `main`, commits sob a identidade `arthurd3`, sem push) +
 reconciliação **light** de status (RINHA_PLAN §9.6 + nova nota Onda 7,
 README roadmap, ARCHITECTURE §8 — "Onda 7 spec+tutorial ready, hand-impl
-pending; reabre o projeto p/ topo do ranking"). Implementação: usuário à mão **ou** delega ao Claude
-(override pontual, como 5/6) → Claude valida G1–G4. **Onda 7 é a corrida
+pending; reabre o projeto p/ topo do ranking"). Implementação: usuário à mão **ou** feita diretamente
+(override pontual, como 5/6) → os gates G1–G4 são validados. **Onda 7 é a corrida
 pelo topo do ranking** (não há "fim" enquanto E>0 e houver gap p/ 6000).

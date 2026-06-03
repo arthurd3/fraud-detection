@@ -2,7 +2,7 @@
 
 > Projeto **tutorial-driven**; entregável = doc (`docs/TUTORIAL_KDTREE.md`).
 > Nesta entrega o usuário fez **override pontual** ("pode aplicar" /
-> "vamos prosseguir o plano") ⇒ **Claude implementa** (igual Ondas 5/6).
+> "vamos prosseguir o plano") ⇒ **implementação feita diretamente** (igual Ondas 5/6).
 > **Supersede:** [`2026-05-18-onda7-exact-accuracy-design.md`](2026-05-18-onda7-exact-accuracy-design.md)
 > (B3 = HNSW aprox + escalonamento; histórico preservado lá).
 
@@ -161,7 +161,7 @@ e cgroup **menores**: ~150–180 MB mmap vs 365 MB antes).
 ### §10. Próximo passo
 `docs/TUTORIAL_KDTREE.md` (hands-on PT-BR) + reconciliação as-built
 (ARCHITECTURE/README/RINHA_PLAN; nota datada) quando os gates fecharem.
-Commits `main` (sem atribuição Claude, sem push): spec → tutorial+reconcil →
+Commits `main` (commits sob a identidade `arthurd3`, sem push): spec → tutorial+reconcil →
 `feat`. Branch `submission` bump `:onda5`→`:onda7` (Onda 7 **muda
 comportamento = melhor score**; a submission deve apontar p/ a imagem
 vencedora; `docker push`/`git push`/PR/issue `rinha/test` = ações do usuário).

@@ -3,7 +3,7 @@
 - **Data:** 2026-05-29 · **revisado 2026-06-01** (pós-lapada; ver §0).
 - **Branch:** `feat/rust-kdtree-search` (a partir de `main` @ `8743bf7`); `submission` permanece image-only.
 - **Tipo:** port pontual (1 módulo) Java → Rust, dentro do binário GraalVM native-image.
-- **Status:** design reconfirmado em brainstorming 2026-06-01 (4 decisões via AskUserQuestion); pendente review do spec → writing-plans → implementação (Claude implementa, usuário valida).
+- **Status:** design reconfirmado em brainstorming 2026-06-01 (4 decisões via AskUserQuestion); pendente review do spec → writing-plans → implementação (implementação feita diretamente, usuário valida).
 
 ---
 
@@ -11,7 +11,7 @@
 
 O corpo (§1–§13) foi escrito em 2026-05-29, ANTES de a arquitetura **lapada (FD-passing)** virar produção. Esta revisão reconfirma o design com 4 decisões do usuário e corrige 6 pontos. **Onde §0 divergir do corpo abaixo, §0 manda.**
 
-**Decisões (brainstorming 2026-06-01):** (1) alvo = a busca KD-tree inteira; (2) estratégia = **port direto** (sem spike de medição), valida E=0 e mede na prévia; (3) implementador = **Claude implementa, usuário valida**; (4) fronteira = **Approach A** (Java passa só `float[14]`; Rust faz `q16`+`round4` também).
+**Decisões (brainstorming 2026-06-01):** (1) alvo = a busca KD-tree inteira; (2) estratégia = **port direto** (sem spike de medição), valida E=0 e mede na prévia; (3) implementador = **implementação feita diretamente, usuário valida**; (4) fronteira = **Approach A** (Java passa só `float[14]`; Rust faz `q16`+`round4` também).
 
 **Deltas vs o corpo:**
 1. **Baseline atual = lapada #36** (`aa7fde8`, imagem `arthurd3/rinha-fraud:lapada-api-mlock`): **final_score 5592.63 / p99 2.554905 ms / E=0**. NÃO mais o K2 4875/13 ms citado no §1/§15. `detection_score` segue 3000 (E=0); 100% do gap p/ 6000 é p99_score. A conclusão **host-bound** do §1 **permanece** (compute ~18 µs de ~2,55 ms).

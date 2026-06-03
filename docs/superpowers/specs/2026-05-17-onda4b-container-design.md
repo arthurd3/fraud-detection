@@ -33,7 +33,7 @@ load balancer round-robin, tudo somando ≤ 1 CPU / 350 MB, k6 oficial (ramp
    **sem build, sem binários no Git, sem rebuild em runtime**; `docker compose
    up` só faz pull. Idiomático do Rinha; branch `submission` minúsculo; sem
    Git-LFS; `compose up` rápido (cabe nos 300 s do CI). Push da imagem + PR
-   upstream = **ações outward-facing do usuário** (Claude prepara/valida local).
+   upstream = **ações outward-facing do usuário** (preparadas/validadas localmente).
 2. **LB = HAProxy `mode tcp`** (RINHA_PLAN §5.10): `balance roundrobin`,
    `nbthread 1`, zero lógica de negócio, repassa bytes crus (o app já faz seu
    HTTP/1.1 by-hand). Imagem pública `haproxy:3-alpine`.
@@ -231,7 +231,7 @@ outward-facing do usuário; o tutorial documenta os comandos exatos).
 | Imagem ~600 MB demora no pull (>300 s do CI) | Só afeta pull, não os 350 MB RAM; base jre enxuta; registry rápido; (opção: distroless/java21) |
 | `docker compose` ignorar `deploy.resources.limits` | Compose v2 honra; fallback `mem_limit`/`cpus` top-level documentado |
 | Branch `submission` com código/binário por engano | Orphan com só 3 arquivos; Gate 4 clona `--depth 1` e confere |
-| Push imagem / PR upstream sem autorização | São ações do usuário (outward-facing); Claude só prepara/valida local |
+| Push imagem / PR upstream sem autorização | São ações do usuário (outward-facing); apenas preparadas/validadas localmente |
 
 ## Próximo passo
 
@@ -239,5 +239,5 @@ Escrever `docs/TUTORIAL_CONTAINER.md` (hands-on PT-BR §0–§N, espelhando
 `TUTORIAL_FIT_350MB.md`) + atualizar ponteiros (`§14` do `TUTORIAL_FIT_350MB.md`,
 `§15` do `TUTORIAL_HNSW.md`) + reconciliar `ARCHITECTURE.md`/`README.md`
 as-built (pendente da 4a + moldura 4b). Implementação à mão fica para o usuário;
-Claude valida os 4 gates quando o daemon Docker estiver de pé. Onda seguinte:
+os 4 gates são validados quando o daemon Docker estiver de pé. Onda seguinte:
 **Onda 5 — GraalVM Native Image + PGO** (revalida Gate A da 2b + gates 3/4a/4b).

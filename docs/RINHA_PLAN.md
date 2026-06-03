@@ -1137,7 +1137,7 @@ Cada onda é uma **mini-aula**. Pré-requisitos linkam para `CONCEITOS.md`. Risc
 > (`docs/superpowers/specs/2026-05-18-onda6-zeroalloc-license-design.md`,
 > commit `a6e330a`) e **tutorial** (`docs/TUTORIAL_ZEROALLOC.md`). Status =
 > **spec + tutorial prontos; implementação à mão pendente** (driven‑by‑tutorial,
-> igual às ondas anteriores: o autor implementa, Claude valida Gates 1
+> igual às ondas anteriores: o autor implementa e valida os gates 1
 > [byte‑idêntico: `RecallHnsw` 96,89 %/99,90 % idêntico, `Rbh2Equiv` 0/3 M, 2
 > oráculos] + 2 [zero‑alloc provado via `ThreadMXBean`] + 3 [k6 opcional]).
 > Comportamento byte‑idêntico (sem mudança de score). Os demais itens da §9.6
@@ -1226,8 +1226,8 @@ Cada onda é uma **mini-aula**. Pré-requisitos linkam para `CONCEITOS.md`. Risc
 > implementada — só design). Spec:
 > `docs/superpowers/specs/2026-05-18-onda7-exact-accuracy-design.md` (commit
 > `3a3cf01`); tutorial: `docs/TUTORIAL_EXACT.md`. Driven‑by‑tutorial, igual
-> às ondas anteriores: o autor implementa à mão **ou** delega ao Claude
-> (como nas Ondas 5/6); Claude valida os gates G1–G5 quando o ambiente
+> às ondas anteriores: a implementação é feita diretamente à mão
+> (como nas Ondas 5/6); os gates G1–G5 são validados quando o ambiente
 > estiver pronto. **Os demais itens da §9.6** (grid‑search M/ef, `sendfile`,
 > prefetch mmap, auditoria NIO) **seguem opcionais e não especificados** —
 > a Onda 7 é ortogonal a eles.

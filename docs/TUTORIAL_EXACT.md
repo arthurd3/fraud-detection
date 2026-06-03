@@ -10,8 +10,8 @@
 
 > ⚠️ **Escopo.** 100 % do gap p/ 6000 é **ACURÁCIA** (FP=61, FN=103 ⇒
 > E=370). NÃO é p99/memória/alloc. Reproduzimos o **ground truth EXATO** sem
-> estourar p99 ≤ 1 ms. Tutorial-driven: você implementa à mão **ou** delega
-> ao Claude (override pontual, como Ondas 5/6).
+> estourar p99 ≤ 1 ms. Tutorial-driven: você implementa à mão **ou** a
+> implementação é feita diretamente (override pontual, como Ondas 5/6).
 
 ---
 
@@ -289,7 +289,7 @@ sem cortes **e** G4 cgroup ≤ 350 MB sem OOMKilled.
 | big-endian RB3 | consistente com RB2/RBH2; G3 valida a leitura |
 | overfit | teste FINAL oficial difere; casar algoritmo, não os 54.100 |
 | snap docker (G1/G4) | `--format \| cat`; build/compose sob `$HOME`; `docker build --progress=plain 2>&1 \| cat` |
-| scripts | sem `set -u`; matar server por PID da porta; **sem atribuição Claude** |
+| scripts | sem `set -u`; matar server por PID da porta; **commits sob a identidade `arthurd3`** |
 
 ---
 
@@ -299,8 +299,8 @@ sem cortes **e** G4 cgroup ≤ 350 MB sem OOMKilled.
 G2/G3 (E≈0, exatidão provada) + G4 (cgroup/p99) verdes; imagem `:onda7`
 pública; `submission` → `:onda7`.
 
-- Você implementa à mão a partir deste tutorial **ou** delega ao Claude
-  (override, como Ondas 5/6) → Claude valida G1–G4 + reconcilia as-built
+- Você implementa à mão a partir deste tutorial **ou** a implementação é feita
+  diretamente (override, como Ondas 5/6) → os gates G1–G4 são validados e o as-built reconciliado
   (ARCHITECTURE/README/RINHA_PLAN; Qdrant + `MEMORY.md`).
 - Outward-facing (suas): `docker push docker.io/arthurd3/rinha-fraud:onda7`,
   `git push origin main`/`submission`, atualizar o PR / abrir issue

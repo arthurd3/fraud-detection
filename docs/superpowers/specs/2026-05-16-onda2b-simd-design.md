@@ -98,7 +98,7 @@ inalterado. `Quantizer` sem mudança de lógica (documentar a invariante do pad-
 
 ### §5b. RESULTADO DA VALIDAÇÃO (2026-05-16) — correção honesta
 
-Implementado pelo usuário e validado por Claude. **Correto**: Gate A (SIMD≡escalar
+Implementado pelo usuário e validado. **Correto**: Gate A (SIMD≡escalar
 bit-a-bit em 3M, 2 oráculos), Gate 1 (oráculos exatos, RB2 51.000.012 B, off-heap
 `-Xmx256m`), Gate 2 (exatamente 1995/2000 = 99.75% FP=2 FN=3). **Gate 3 NEGATIVO**:
 HotSpot 21/AVX2 — escalar p50≈37 ms vs **SIMD p50≈142 ms** (≈0.26×, **3.8× mais lento**);

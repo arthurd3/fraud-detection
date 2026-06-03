@@ -13,7 +13,7 @@
 > **ZERO mudança de Java** — só `Dockerfile`, `pom.xml` (profile `native`),
 > `default.iprof` (PGO) e revalidar gates. **`docker push` da imagem nativa, a
 > atualização da `submission` e o PR são ações SUAS (outward-facing)** — este
-> tutorial dá os comandos; o Claude prepara/valida localmente. Onda 5 **fecha
+> tutorial dá os comandos; a preparação/validação é feita localmente. Onda 5 **fecha
 > o projeto** (Onda 6 = otimizações opcionais).
 
 ---

@@ -301,7 +301,7 @@ Economia adicional: -6 MB mmap (STRIDE 18 → 36B/node × 3M = 108 MB pts).
 - **`docker compose --compatibility`** obrigatório p/ aplicar 350M/1CPU reais (sem isso, cpus/memory são hints).
 - **snap docker**: `--format … | cat` (tabela engole em não-TTY); rodar build/compose sob `$HOME` (confinamento snap); `docker build … 2>&1 | cat` (redirecionar em fg) ou `… 2>&1 | cat > log` (bg longo).
 - **Capturar baseline ANTES** do rebuild (golden oracle); sem `set -u`; matar :9999 por PID da porta.
-- **Sem atribuição Claude nos commits**; identidade `arthurd3`; `docker push`/`git push`/issue Rinha = outward-facing do usuário.
+- **Commits sob a identidade `arthurd3`**; `docker push`/`git push`/issue Rinha = outward-facing do usuário.
 - **PGO**: a redução de STRIDE muda layout de `pts[]` em memória ⇒ PGO `default.iprof` continua válido (branch frequencies dependem da ordem de visita, não do tamanho do node). Lição Onda 16: PGO regen ISOLADO não compensou — não rebuild PGO só por isso. Se TIER 2 entrar (mudanças em `fraudBit`/`rightAt`), aí sim considerar regen.
 - **Format bump**: `KdTreeIO.isValid` é o portão — sem MAGIC novo, Prebuild não regenera automaticamente, e a app falha no boot com "bad magic".
 

@@ -209,6 +209,6 @@ Mudança de fórmula/quantização/threshold/parametros HNSW (M/M0/efC/ef_search
 
 Escrever `docs/TUTORIAL_FIT_350MB.md` (hands-on PT-BR, §0–§N, espelhando
 `TUTORIAL_HNSW.md`) + atualizar o ponteiro `§15` do `TUTORIAL_HNSW.md`.
-Implementação fica para o usuário (tutorial-driven); Claude valida os 4 gates.
+Implementação fica para o usuário (tutorial-driven); os 4 gates são validados.
 Onda seguinte: **Onda 4b — conteinerização + HAProxy TCP + 2 instâncias + k6
 oficial + branch `submission`** (consome os binários RBH2 da 4a).

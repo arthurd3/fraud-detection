@@ -13,7 +13,7 @@
 > 4a resolveu "caber em 350 MB". Esta é a última etapa antes da submissão;
 > depois só **Onda 5** (Native Image). **`docker push` da imagem pública e o
 > PR no upstream são ações SUAS (outward-facing)** — este tutorial dá os
-> comandos exatos; o Claude prepara e valida localmente, você publica/abre PR.
+> comandos exatos; a preparação e validação são feitas localmente; a publicação/PR é sua.
 
 ---
 
@@ -92,8 +92,8 @@ reclaimáveis; a 4a provou 2 inst. = 147 MiB).
    proxy fiel ao cgroup), a 4b é compose+HAProxy+registry+`docker stats` — sem
    substituto. Sem daemon, a 4b não valida.
 5. **Ações outward-facing são suas.** `docker push` e o PR no upstream
-   zanfranceschi: o tutorial dá os comandos; você executa. Claude prepara e
-   valida tudo localmente.
+   zanfranceschi: o tutorial dá os comandos; você executa. Tudo é preparado e
+   validado localmente.
 6. **Zero mudança de Java.** `Main` já lê `DATA_PATH` e a porta por arg (4a).
 
 ---
@@ -391,7 +391,7 @@ errado — não deve ter `Dockerfile`/`build:`.)
 | `deploy.resources.limits` ignorado | compose v2 honra; fallback `mem_limit`/`cpus` top-level | §6 |
 | limites por-serviço vs mmap | 4a provou 147 MiB/2 inst.; `docker stats` no Gate 2; subir limite se OOM | §11 |
 | `image: <user>/...` não trocado | troque pelo seu namespace; senão `pull` falha no Gate 4 | §6/§9 |
-| push/PR sem querer | são ações suas (outward-facing); Claude só prepara/valida local | §2/§9 |
+| push/PR sem querer | são ações suas (outward-facing); preparado e validado localmente | §2/§9 |
 | imagem ~600 MB | só afeta pull (≤300 s), não os 350 MB RAM | §9 |
 
 ---
